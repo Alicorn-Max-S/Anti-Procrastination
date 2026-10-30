@@ -127,6 +127,13 @@ def second_solve(questions: list[PracticeQuestion]) -> list[PracticeQuestion]:
 # ---- the prompt -------------------------------------------------------------------------------
 
 
+def _is_key(doc: Material) -> bool:
+    """Answer keys never become a question's source: the student should work from the sheet."""
+    from app.prep import is_answer_key  # prep imports this module
+
+    return is_answer_key(doc.title)
+
+
 def _feedback_lines(conn: sqlite3.Connection, course_id: int, unit_feedback: list[Material]) -> str:
     """Teacher feedback on earlier work in this unit, plus on earlier tests anywhere in the course."""
     lines = [f"- {m.title}: " + " ".join(m.pages[0].split())[:400] for m in unit_feedback]
@@ -156,7 +163,9 @@ def _prompt(
     )
     where = "its Canvas module" if unit.from_module else "assignments due before the test"
     listed = "\n".join(
-        f"- {d.title}" + ("" if d.readable else f" (not read: {d.note or 'no text'})")
+        f"- {d.title}"
+        + (" (answer key: not used for questions)" if _is_key(d) else "")
+        + ("" if d.readable else f" (not read: {d.note or 'no text'})")
         for d in docs if d.kind != "feedback"
     )
     quoted = "\n\n".join(f"[{e.id}] {e.label}\n{e.text}" for e in picked)
@@ -233,7 +242,8 @@ def add_practice(conn: sqlite3.Connection, assignment: Assignment, card: PrepCar
     unit = materials.find_unit(conn, assignment)
     docs = materials.gather(conn, assignment, unit)
     text, _, _ = canvas.parse_description(assignment.description_html)
-    picked = materials.excerpts([d for d in docs if d.readable and d.kind != "feedback"], f"{assignment.name} {unit.name} {text}")
+    usable = [d for d in docs if d.readable and d.kind != "feedback" and not _is_key(d)]
+    picked = materials.excerpts(usable, f"{assignment.name} {unit.name} {text}")
     log.info("practice for %s: unit %r, %d docs, %d excerpts", assignment.id, unit.name, len(docs), len(picked))
     try:
         draft = meta_client.generate_structured(

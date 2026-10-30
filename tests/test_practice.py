@@ -24,9 +24,10 @@ MODULES = [
         {"id": 20, "type": "SubHeader", "title": "Notes"},
         {"id": 21, "type": "File", "title": "Presentation: Vectors", "content_id": 501,
          "url": "https://canvas.test/api/v1/courses/7/files/501", "html_url": "https://canvas.test/items/21"},
-        {"id": 22, "type": "Page", "title": "KEY: Unit Vectors", "page_url": "key-unit-vectors", "html_url": "https://canvas.test/items/22"},
+        {"id": 22, "type": "Page", "title": "Unit Vectors Practice", "page_url": "unit-vectors", "html_url": "https://canvas.test/items/22"},
         {"id": 23, "type": "Assignment", "title": "Vectors HW", "content_id": 11, "html_url": "https://canvas.test/items/23"},
         {"id": 24, "type": "Page", "title": "Extra Practice", "page_url": "extra", "html_url": "https://canvas.test/items/24"},
+        {"id": 26, "type": "Page", "title": "KEY: Vectors HW", "page_url": "key-hw", "html_url": "https://canvas.test/items/26"},
         {"id": 25, "type": "Assignment", "title": TEST.name, "content_id": 12},
     ]},
 ]
@@ -47,8 +48,10 @@ def canvas_api(monkeypatch):
         hits.append(path)
         if path == f"/api/v1/courses/{COURSE}/modules":
             return httpx.Response(200, json=MODULES)
-        if path.endswith("/pages/key-unit-vectors"):
+        if path.endswith("/pages/unit-vectors"):
             return httpx.Response(200, json={"body": '<p><iframe title="Unit Vectors Key" src="https://docs.google.com/document/d/AAAAAAAAAAAAAAAAAAAAAAAA/preview"></iframe></p>'})
+        if path.endswith("/pages/key-hw"):
+            return httpx.Response(200, json={"body": "<p>1. The boat moves at 5 m/s, 37 degrees from the bank, by Pythagoras.</p>"})
         if path.endswith("/pages/extra"):
             return httpx.Response(200, json={"body": '<iframe src="https://docs.google.com/document/d/CCCCCCCCCCCCCCCCCCCCCCCC/preview"></iframe>'})
         if path.endswith("/files/501"):
@@ -141,9 +144,9 @@ def test_without_modules_the_unit_is_assignments_since_the_last_test(conn):
 def test_gather_reads_files_pages_docs_and_feedback_once(course, canvas_api, google):
     unit = materials.find_unit(course, TEST)
     docs = {m.title: m for m in materials.gather(course, TEST, unit)}
-    assert set(docs) == {"Presentation: Vectors", "KEY: Unit Vectors", "Vectors HW", "Feedback on Vectors HW", "Extra Practice"}
+    assert set(docs) == {"Presentation: Vectors", "Unit Vectors Practice", "Vectors HW", "Feedback on Vectors HW", "Extra Practice", "KEY: Vectors HW"}
     assert "tip to tail" in docs["Presentation: Vectors"].pages[0]
-    assert docs["KEY: Unit Vectors"].pages[0].startswith("1. Find the unit vector")  # BOM stripped
+    assert docs["Unit Vectors Practice"].pages[0].startswith("1. Find the unit vector")  # BOM stripped
     assert docs["Vectors HW"].kind == "google" and docs["Vectors HW"].url == HW.html_url
     assert "angle" in docs["Feedback on Vectors HW"].pages[0]
     assert not docs["Extra Practice"].readable and docs["Extra Practice"].note == "shared only inside the school"
@@ -151,9 +154,9 @@ def test_gather_reads_files_pages_docs_and_feedback_once(course, canvas_api, goo
     google.clear()
     canvas_api.clear()
     again = materials.gather(course, TEST, unit)
-    assert len(again) == 5
+    assert len(again) == 6
     assert all("AAAA" not in u and "BBBB" not in u for u in google)  # read docs come from the cache
-    assert not any("/files/" in p or "/pages/key-unit-vectors" in p for p in canvas_api)
+    assert not any("/files/" in p or "/pages/unit-vectors" in p for p in canvas_api)
 
 
 def test_school_only_docs_use_the_extensions_upload(course, canvas_api, google, monkeypatch, tmp_path):
@@ -229,13 +232,14 @@ def test_practice_cites_unit_documents_easiest_first(course, canvas_api, google,
     assert "Unit: Unit 2: Vectors" in prompt and "[S1] Presentation: Vectors" in prompt
     assert "tip to tail" in prompt and "Include the angle" in prompt
     assert "Extra Practice (not read: shared only inside the school)" in prompt
+    assert "KEY: Vectors HW (answer key: not used for questions)" in prompt and "by Pythagoras" not in prompt
 
     assert [p.prompt for p in card.practice] == ["warm", "mid", "hard"]  # uncited one dropped
-    assert card.practice[0].source == "KEY: Unit Vectors" and card.practice[0].source_url == "https://canvas.test/items/22"
+    assert card.practice[0].source == "Unit Vectors Practice" and card.practice[0].source_url == "https://canvas.test/items/22"
     assert card.first_step.startswith("Read practice question 1 below and write the formula")
     assert card.focus.endswith("Built from Unit 2: Vectors.")
     sources = {s.name: s for s in card.sources}
-    assert {"Presentation: Vectors", "KEY: Unit Vectors", "Vectors HW", "Extra Practice"} <= set(sources)
+    assert {"Presentation: Vectors", "Unit Vectors Practice", "Vectors HW", "Extra Practice"} <= set(sources)
     assert not sources["Extra Practice"].read and sources["Extra Practice"].reason
     assert "Feedback on Vectors HW" not in sources
 
