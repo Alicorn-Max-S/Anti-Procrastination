@@ -132,6 +132,32 @@ function renderClock() {
   $("#clock-badge").hidden = !state.simulated;
 }
 
+let syncTimer = null; // fast polling while a sync runs
+let syncDismissed = localGet("syncDismissed");
+
+function localGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function localSet(key, value) {
+  try { localStorage.setItem(key, value); } catch {}
+}
+
+// "Building card 3 of 5: Lab: Relative Velocity"
+function progressText(p) {
+  if (!p || !p.phase) return "Starting sync…";
+  const count = p.total ? ` ${Math.min(p.done + 1, p.total)} of ${p.total}` : "";
+  const now = p.current.length ? `: ${p.current.join(", ")}` : "";
+  if (p.phase === "cards") {
+    // cards build in parallel, so name everything in flight
+    if (p.total === 1) return `Building card${now}`;
+    return `Building cards (${p.done} of ${p.total} done)${now}`;
+  }
+  if (p.phase === "feedback") return `Fetching teacher feedback${count}`;
+  if (p.phase === "assignments") return `Fetching assignments from ${p.total} courses (${p.done} done)`;
+  return `${p.label}…`;
+}
+
 function renderSync() {
   const s = state.sync;
   const out = $("#sync-status");
@@ -144,7 +170,54 @@ function renderSync() {
     out.textContent = mins < 1 ? "Synced just now" : `Synced ${mins} min ago`;
   } else out.textContent = "";
   $("#sync-btn").disabled = s.running;
+  renderSyncPanel(s);
+  if (s.running && !syncTimer) syncTimer = setInterval(refresh, 1000);
+  if (!s.running && syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+  }
 }
+
+function renderSyncPanel(s) {
+  const panel = $("#sync-panel");
+  const p = s.running ? s.progress : s.report;
+  const failures = (p && p.failures) || [];
+  const showReport = !s.running && p && (failures.length || s.error) && syncDismissed !== p.started_at;
+  panel.hidden = !(s.running || showReport);
+  if (panel.hidden) return;
+  panel.classList.toggle("has-failures", failures.length > 0 || !!s.error);
+  const fill = $("#sync-fill");
+  if (s.running) {
+    $("#sync-text").textContent = progressText(p);
+    const share = p && p.total ? p.done / p.total : 0;
+    fill.style.width = `${Math.round(share * 100)}%`;
+    fill.parentElement.hidden = !(p && p.total);
+  } else {
+    const secs = p.timings && p.timings.total ? ` in ${Math.round(p.timings.total)} s` : "";
+    const cards = p.cards !== undefined ? ` · ${p.cards} new card${p.cards === 1 ? "" : "s"}` : "";
+    $("#sync-text").textContent = s.error
+      ? `Last sync failed: ${s.error}`
+      : `Last sync finished${secs}${cards} · ${failures.length} didn't work:`;
+    fill.parentElement.hidden = true;
+  }
+  $("#sync-dismiss").hidden = s.running;
+  $("#sync-failures").replaceChildren(
+    ...failures.map((f) => {
+      const li = el("li");
+      li.append(el("strong", "", f.name), document.createTextNode(` (${f.phase}): ${f.error}`));
+      return li;
+    }),
+  );
+}
+
+$("#sync-dismiss").addEventListener("click", () => {
+  const r = state && state.sync.report;
+  if (r) {
+    syncDismissed = r.started_at;
+    localSet("syncDismissed", syncDismissed);
+  }
+  $("#sync-panel").hidden = true;
+});
 
 // ---- check-in ----------------------------------------------------------------------------------
 
@@ -723,6 +796,7 @@ function notifyNew() {
       b.id,
     );
   }
+  if (!syncTimer) syncTimer = setInterval(refresh, 1000); // show progress while the POST runs
 }
 
 // ---- boot --------------------------------------------------------------------------------------

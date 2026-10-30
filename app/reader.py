@@ -31,7 +31,7 @@ from app.models import Assignment, SourceFile
 log = logging.getLogger(__name__)
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # scanned PDFs log a warning per broken xref
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 FETCH_WORKERS = 4
 MODEL_MAX_BYTES = 20_000_000  # a PDF bigger than this goes to the model as its extracted text
 MODEL_PAGE_BUDGET = 60  # PDF pages sent as PDFs per card; past this, docs go as text
@@ -112,15 +112,23 @@ def _tidy(text: str) -> str:
 
 def _halves(page, width: float) -> tuple[str, str]:
     """Text on the left and right half of a page, split by where each text run starts."""
-    left: list[str] = []
-    right: list[str] = []
+    sides: dict[str, list[str]] = {"left": [], "right": []}
+    last_y: dict[str, float | None] = {"left": None, "right": None}
 
     def visit(text, cm, tm, font_dict, font_size):
+        if not text:
+            return
         x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
-        (left if x < width / 2 else right).append(text)
+        y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+        side = "left" if x < width / 2 else "right"
+        out = sides[side]
+        if last_y[side] is not None and abs(y - last_y[side]) > 1 and out and not out[-1].endswith("\n"):
+            out.append("\n")  # a new line on the page, even if the PDF didn't say so
+        last_y[side] = y
+        out.append(text)
 
     page.extract_text(visitor_text=visit)
-    return _tidy("".join(left)), _tidy("".join(right))
+    return _tidy("".join(sides["left"])), _tidy("".join(sides["right"]))
 
 
 _HEAD_NUMBER = [

@@ -15,6 +15,9 @@ Run `python -m app.canvas` to check your token. Never commit raw responses (publ
 """
 
 import re
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin
@@ -38,13 +41,34 @@ def _client() -> httpx.Client:
     )
 
 
+@contextmanager
+def _session(client: httpx.Client | None) -> Iterator[httpx.Client]:
+    """The caller's client (sync.py shares one across its worker threads), or a fresh one."""
+    if client is not None:
+        yield client
+    else:
+        with _client() as c:
+            yield c
+
+
+def _get(client: httpx.Client, url: str, params=None) -> httpx.Response:
+    """GET, backing off briefly when Canvas throttles parallel requests (403 "Rate Limit Exceeded")."""
+    for attempt in range(4):
+        r = client.get(url, params=params)
+        throttled = r.status_code == 429 or (r.status_code == 403 and "rate limit" in r.text.lower())
+        if not throttled or attempt == 3:
+            return r
+        time.sleep(0.5 * 2**attempt)
+    return r
+
+
 def _get_all(client: httpx.Client, path: str, params: list[tuple[str, str | int]]) -> list[dict]:
     """GET a paginated list endpoint and return every page joined together."""
     out: list[dict] = []
     url: str | None = path
     query: list | None = [*params, ("per_page", 100)]
     while url:
-        r = client.get(url, params=query)
+        r = _get(client, url, params=query)
         r.raise_for_status()
         out.extend(r.json())
         url = r.links.get("next", {}).get("url")
@@ -60,9 +84,9 @@ def check_token() -> dict:
         return r.json()
 
 
-def fetch_courses() -> list[Course]:
+def fetch_courses(client: httpx.Client | None = None) -> list[Course]:
     """Active courses for the signed-in student."""
-    with _client() as c:
+    with _session(client) as c:
         raw = _get_all(c, "/api/v1/courses", [("enrollment_state", "active")])
     return [
         Course(id=course["id"], name=course["name"])
@@ -71,9 +95,9 @@ def fetch_courses() -> list[Course]:
     ]
 
 
-def fetch_assignments(course_id: int) -> list[Assignment]:
+def fetch_assignments(course_id: int, client: httpx.Client | None = None) -> list[Assignment]:
     """All assignments in a course, with score, due date and rubric criteria filled in."""
-    with _client() as c:
+    with _session(client) as c:
         raw = _get_all(c, f"/api/v1/courses/{course_id}/assignments", [("include[]", "submission")])
     return [assignment_from_json(course_id, a) for a in raw]
 
@@ -114,10 +138,11 @@ def assignment_from_json(course_id: int, a: dict) -> Assignment:
     return assignment.model_copy(update={"kind": guess_kind(assignment)})
 
 
-def fetch_feedback(course_id: int, assignment: Assignment) -> Assignment:
+def fetch_feedback(course_id: int, assignment: Assignment, client: httpx.Client | None = None) -> Assignment:
     """Return the assignment with `comments` and `rubric` populated from submissions/self."""
-    with _client() as c:
-        r = c.get(
+    with _session(client) as c:
+        r = _get(
+            c,
             f"/api/v1/courses/{course_id}/assignments/{assignment.id}/submissions/self",
             params=[("include[]", "submission_comments"), ("include[]", "rubric_assessment")],
         )
@@ -262,10 +287,8 @@ class FetchedFile(BaseModel):
 def fetch_file(api_endpoint: str, dest_dir: Path, client: httpx.Client | None = None) -> FetchedFile:
     """Download a Canvas file (given its API endpoint) into dest_dir, reusing an earlier download
     of the same size. Says why when it can't."""
-    own = client is None
-    c = client or _client()
-    try:
-        meta = c.get(api_endpoint)
+    with _session(client) as c:
+        meta = _get(c, api_endpoint)
         if meta.status_code in (401, 403):
             return FetchedFile(reason="locked or not shared with students")
         if meta.status_code != 200:
@@ -286,9 +309,6 @@ def fetch_file(api_endpoint: str, dest_dir: Path, client: httpx.Client | None = 
                 return FetchedFile(name=name, url=page_url, reason=f"download failed (HTTP {r.status_code})")
             path.write_bytes(r.content)
         return FetchedFile(path=path, name=name, url=page_url)
-    finally:
-        if own:
-            c.close()
 
 
 def download_file(api_endpoint: str, dest_dir: Path) -> Path | None:
@@ -299,7 +319,7 @@ def download_file(api_endpoint: str, dest_dir: Path) -> Path | None:
 def fetch_page(course_id: int, slug: str) -> dict | None:
     """A Canvas page (title, body HTML), or None if it's missing or locked."""
     with _client() as c:
-        r = c.get(f"/api/v1/courses/{course_id}/pages/{slug}")
+        r = _get(c, f"/api/v1/courses/{course_id}/pages/{slug}")
     return r.json() if r.status_code == 200 else None
 
 

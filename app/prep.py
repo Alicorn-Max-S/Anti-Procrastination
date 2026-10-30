@@ -18,6 +18,7 @@ Canvas, so there's nothing to fetch: the card's link and first step send the stu
 
 import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,8 +38,11 @@ from app.models import (
     ReadingPlan,
     SourceFile,
 )
+from app.progress import Progress
 
 log = logging.getLogger(__name__)
+
+CARD_WORKERS = 4  # model cards built at once during a sync
 
 
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
@@ -416,17 +420,46 @@ def upcoming(assignments: list[Assignment], now: datetime, horizon_days: int) ->
 
 
 def build_all_missing(
-    conn: sqlite3.Connection, now: datetime, horizon_days: int | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    now: datetime,
+    horizon_days: int | None = None,
+    limit: int | None = None,
+    progress: Progress | None = None,
 ) -> list[PrepCard]:
     """Generate cards for upcoming assignments that don't have one yet (soonest due first).
 
     Model cards cost money, so they're capped per call; template cards are free and uncapped.
+    Model cards are built CARD_WORKERS at a time, each on its own DB connection; a card that
+    fails is reported in `progress` instead of stopping the rest.
     """
+    progress = progress or Progress()
     have = {c.assignment_id for c in db.list_cards(conn)}
     todo = [
         a for a in upcoming(db.list_assignments(conn), now, horizon_days or settings.card_horizon_days)
         if a.id not in have
     ]
-    if meta_client.configured():
-        todo = todo[: limit or settings.max_cards_per_sync]
-    return [build_prep_card(conn, a) for a in todo]
+    if not meta_client.configured():
+        return [build_prep_card(conn, a) for a in todo]
+    todo = todo[: limit or settings.max_cards_per_sync]
+    progress.phase("cards", total=len(todo))
+
+    def build(a: Assignment) -> PrepCard | None:
+        progress.begin(a.name)
+        own = db.connect()
+        try:
+            card = build_prep_card(own, a)
+            if card.generated_by == "fallback":
+                progress.fail(a.name, card.model_error or "the model call failed, so this is a template card")
+            return card
+        except Exception as e:  # one broken card mustn't stop the others
+            log.exception("card for %s failed", a.id)
+            progress.fail(a.name, f"{type(e).__name__}: {e}")
+            return None
+        finally:
+            own.close()
+            progress.end(a.name)
+
+    if not todo:
+        return []
+    with ThreadPoolExecutor(max_workers=min(CARD_WORKERS, len(todo))) as pool:
+        return [c for c in pool.map(build, todo) if c is not None]

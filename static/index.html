@@ -24,6 +24,15 @@
       </div>
     </header>
 
+    <section id="sync-panel" class="sync-panel" aria-live="polite" hidden>
+      <div class="sync-line">
+        <span id="sync-text"></span>
+        <button id="sync-dismiss" class="ghost small" type="button" hidden>Dismiss</button>
+      </div>
+      <div class="sync-track"><div id="sync-fill" class="sync-fill"></div></div>
+      <ul id="sync-failures" class="sync-failures"></ul>
+    </section>
+
     <section class="clockbar" aria-label="Demo clock">
       <div class="clock-now">
         <span id="clock-time">--</span>

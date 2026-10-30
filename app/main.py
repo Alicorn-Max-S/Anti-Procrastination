@@ -6,6 +6,7 @@ every few seconds (pings + missed starts); set BACKGROUND=0 to turn it off.
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -153,6 +154,19 @@ def health() -> dict:
     }
 
 
+def _sync_state(conn) -> dict:
+    """Sync status for the sync bar: live progress while running, the last report after."""
+    running = loop.sync_lock.locked()
+    report = db.kv_get(conn, "sync_report")
+    return {
+        "last": db.kv_get(conn, "last_sync"),
+        "error": db.kv_get(conn, "sync_error") or None,
+        "running": running,
+        "progress": loop.progress.snapshot() if running else None,
+        "report": json.loads(report) if report else None,
+    }
+
+
 @app.get("/api/state")
 def state(conn=Depends(get_conn)) -> dict:
     """Everything the page polls for: clock, this week's blocks, pending check-ins, sync status."""
@@ -168,11 +182,7 @@ def state(conn=Depends(get_conn)) -> dict:
         "blocks": [ctx.block(b) for b in week],
         "checkin": [ctx.block(b) for b in _checkin_blocks(blocks, now)],
         "done_assignments": sorted(_done_assignments(blocks)),
-        "sync": {
-            "last": db.kv_get(conn, "last_sync"),
-            "error": db.kv_get(conn, "sync_error") or None,
-            "running": loop.sync_lock.locked(),
-        },
+        "sync": _sync_state(conn),
         "config": {
             "canvas": loop.canvas_configured(),
             "model": meta_client.configured(),

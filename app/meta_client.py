@@ -12,6 +12,7 @@ import base64
 import json
 import logging
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ TEXT_SUFFIXES = {".txt", ".md", ".csv"}
 
 # Running token totals since the server started, shown on /api/health for the cost check.
 usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+_usage_lock = threading.Lock()  # cards are built on several threads at once
 
 
 class MetaError(RuntimeError):
@@ -135,9 +137,10 @@ def _post(client: httpx.Client, body: dict) -> dict:
     if data.get("status") == "incomplete":
         raise MetaError(f"Response incomplete: {data.get('incomplete_details')}")
     u = data.get("usage") or {}
-    usage["calls"] += 1
-    usage["input_tokens"] += u.get("input_tokens", 0)
-    usage["output_tokens"] += u.get("output_tokens", 0)
+    with _usage_lock:
+        usage["calls"] += 1
+        usage["input_tokens"] += u.get("input_tokens", 0)
+        usage["output_tokens"] += u.get("output_tokens", 0)
     log.info("meta call: in=%s out=%s", u.get("input_tokens"), u.get("output_tokens"))
     return data
 

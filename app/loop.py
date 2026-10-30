@@ -6,6 +6,7 @@ and the clock endpoint can call them directly. Every ping, answer and start land
 `pings` table, which is the real usage data for the demo.
 """
 
+import json
 import logging
 import sqlite3
 import threading
@@ -15,10 +16,12 @@ from app import db, prep, push, scheduler, sync
 from app.clock import clock
 from app.config import settings
 from app.models import Block, Ping
+from app.progress import Progress
 
 log = logging.getLogger(__name__)
 
 sync_lock = threading.Lock()  # one sync at a time (background loop vs. the Sync button)
+progress = Progress()  # what the running sync is doing, for /api/state
 
 
 def canvas_configured() -> bool:
@@ -82,17 +85,20 @@ def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
 def run_sync() -> dict:
     """Canvas sync (if a token is set) -> cards for upcoming work -> plan blocks.
 
-    Opens its own connection so it can run on a worker thread. Records the time and any error in
-    the kv table for the page to show.
+    Opens its own connection so it can run on a worker thread. Reports each phase to `progress`
+    as it goes, and records the time, any error and the finished report (phase timings, cards
+    that failed) in the kv table for the page to show.
     """
     if not sync_lock.acquire(blocking=False):
         return {"skipped": True}
+    progress.reset()
     conn = db.connect()
     result: dict = {"assignments": 0, "cards": 0, "blocks": 0}
     try:
         if canvas_configured():
-            result["assignments"] = sync.sync_all(conn)
-        result["cards"] = len(prep.build_all_missing(conn, clock.now()))
+            result["assignments"] = sync.sync_all(conn, progress)
+        result["cards"] = len(prep.build_all_missing(conn, clock.now(), progress=progress))
+        progress.phase("planning")
         result["blocks"] = len(replan(conn, clock.now()))
         db.kv_set(conn, "sync_error", "")
     except Exception as e:
@@ -100,6 +106,11 @@ def run_sync() -> dict:
         result["error"] = f"{type(e).__name__}: {e}"[:300]
         db.kv_set(conn, "sync_error", result["error"])
     finally:
+        report = progress.finish()
+        result["timings"] = report["timings"]
+        result["failures"] = report["failures"]
+        log.info("sync done: %s", json.dumps({k: v for k, v in result.items() if k != "failures"}))
+        db.kv_set(conn, "sync_report", json.dumps({**report, **result}))
         db.kv_set(conn, "last_sync", datetime.now(timezone.utc).isoformat())
         conn.close()
         sync_lock.release()
