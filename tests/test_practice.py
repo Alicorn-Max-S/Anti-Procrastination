@@ -6,7 +6,7 @@ import pytest
 from app import browser_files, canvas, db, gdocs, materials, meta_client, practice
 from app.config import settings
 from app.materials import Material
-from app.models import Assignment, PrepCard, SubmissionComment
+from app.models import Assignment, PracticeQuestion, PrepCard, SubmissionComment
 from tests.conftest import at
 
 COURSE = 7
@@ -222,7 +222,7 @@ def test_practice_cites_unit_documents_easiest_first(course, canvas_api, google,
     replies, prompts = model
     replies.append(practice.PracticeDraft(
         focus="Vector addition and river crossings.",
-        first_step="Read practice question 1 below and write the formula for a vector's magnitude.",
+        first_step="Read practice question 1 below and underline what it asks for.",
         questions=[q("hard", 3, "S3"), q("warm", 1, "[S2]"), q("mid", 2, "S1"), q("made up", 2, "S99")],
     ))
     replies.append(practice.Solved(answers=["5 m/s"] * 3))
@@ -236,7 +236,7 @@ def test_practice_cites_unit_documents_easiest_first(course, canvas_api, google,
 
     assert [p.prompt for p in card.practice] == ["warm", "mid", "hard"]  # uncited one dropped
     assert card.practice[0].source == "Unit Vectors Practice" and card.practice[0].source_url == "https://canvas.test/items/22"
-    assert card.first_step.startswith("Read practice question 1 below and write the formula")
+    assert card.first_step == "Read practice question 1 below and underline what it asks for."
     assert card.focus.endswith("Built from Unit 2: Vectors.")
     sources = {s.name: s for s in card.sources}
     assert {"Presentation: Vectors", "Unit Vectors Practice", "Vectors HW", "Extra Practice"} <= set(sources)
@@ -247,14 +247,39 @@ def test_practice_cites_unit_documents_easiest_first(course, canvas_api, google,
 def test_first_step_falls_back_when_the_warmup_was_dropped(course, canvas_api, google, model):
     replies, _ = model
     replies.append(practice.PracticeDraft(
-        focus="f", first_step="Read practice question 1 below and write the warm-up formula.",
+        focus="f", first_step="Read practice question 1 below and underline what it asks for.",
         questions=[q("warm", 1, "S1"), q("a", 2, "S1"), q("b", 2, "S2"), q("c", 3, "S3")],
     ))
     replies.append(practice.Solved(answers=["wrong", "5 m/s", "5 m/s", "5 m/s"]))
     replies.append(practice.Judged(same=[False]))
     card = practice.add_practice(course, TEST, CARD)
     assert [p.prompt for p in card.practice] == ["a", "b", "c"]
-    assert card.first_step == "Read practice question 1 below (vectors) and write down just the formula or rule you'd use."
+    assert card.first_step == practice.SAFE_FIRST_STEP
+
+
+def test_first_step_never_gives_away_question_1():
+    q1 = PracticeQuestion(topic="components", qtype="calculation", prompt="A hawk flies 24 m/s at 30 degrees north of east. East component?",
+                          answer="20.8 m/s East", explanation="Multiply the speed by the cosine of the angle.")
+    unsafe = [
+        "Read practice question 1 below and write Vx = (24 m/s)cos(30°) for the eastward component.",
+        "Read practice question 1 below and write the formula for a vector's x-component.",
+        "Read practice question 1 below and multiply the speed by the cosine.",  # the explanation's method
+        "Read practice question 1 and set up a right triangle.",
+        "Read practice question 1 below; the answer points East.",
+    ]
+    assert all(practice.gives_away(step, q1) for step in unsafe)
+    assert not practice.gives_away(practice.SAFE_FIRST_STEP, q1)
+    assert not practice.gives_away("Read practice question 1 and try it on paper without notes.", q1)
+
+
+def test_unsafe_model_first_step_falls_back(course, canvas_api, google, model):
+    replies, _ = model
+    replies.append(practice.PracticeDraft(
+        focus="f", first_step="Read practice question 1 below and write v = 5 m/s - 2 m/s.",
+        questions=[q("warm", 1, "S1"), q("a", 2, "S1"), q("b", 3, "S2")],
+    ))
+    replies.append(practice.Solved(answers=["5 m/s"] * 3))
+    assert practice.add_practice(course, TEST, CARD).first_step == practice.SAFE_FIRST_STEP
 
 
 def test_practice_without_materials_still_works(conn, model):

@@ -42,9 +42,10 @@ INSTRUCTIONS = """You write short practice sets for a high-school student's upco
 - Each question has one clearly correct answer. For multiple choice, list the choices and give the
   correct choice's full text as the answer. Include units in numeric answers. Keep explanations to
   one or two sentences.
-- first_step: one action of about two minutes that starts practice question 1 and names exactly
-  what to write, e.g. "Read practice question 1 below and write the formula for a vector's
-  x-component." Don't solve it for them.
+- first_step: one action of about two minutes that starts practice question 1 without giving away
+  any part of its solution: no formulas, numbers, values, components, setups, chosen options or
+  hints. E.g. "Read practice question 1 below and write down what it gives you and what it asks
+  for." The student works out the method themselves.
 - focus: one sentence on what the set covers and which weak spot it aims at, if any."""
 
 
@@ -220,13 +221,42 @@ def _sources(card: PrepCard, docs: list[Material], picked: list[Excerpt]) -> lis
     return out
 
 
+SAFE_FIRST_STEP = "Read practice question 1 below and write down what it gives you and what it asks for."
+
+# A first step must not hand over any of question 1's solution: no numbers, maths, setups or hints.
+_MATHY = re.compile(
+    r"\d|[=+*/^√°θπ×÷<>]|\b(sin|cos|tan|sqrt|log|ln)\b|\b(formulas?|equations?|plug|substitut\w*|"
+    r"solve for|set up|use the|choose|pick|answer is|hint)\b",
+    re.I,
+)
+_PLAIN = set(
+    """read practice question below write down what gives give asks given find notes without list
+    circle underline quantities quantity words word sentence first then each that this with your
+    from just they them their have does want wants into onto about paper scratch try attempt""".split()
+)
+
+
+def gives_away(step: str, q: PracticeQuestion) -> bool:
+    """Whether a first step contains part of question 1's solution: any number or maths, a setup
+    word, or a word from the answer or explanation (beyond plain instructions)."""
+    text = re.sub(r"\b(?:practice\s+)?question\s+1\b|\bQ1\b", " ", step, flags=re.I)
+    if _MATHY.search(text):
+        return True
+    secret = {w for w in re.findall(r"[a-z]{4,}", f"{q.answer} {q.explanation}".lower())} - _PLAIN
+    return any(w in secret for w in re.findall(r"[a-z]{4,}", text.lower()))
+
+
 def _first_step(draft: PracticeDraft, questions: list[PracticeQuestion]) -> str:
-    """The model's warm-up step when question 1 is still the warm-up it was written for."""
+    """The model's warm-up step when question 1 is still the warm-up it was written for and the
+    step gives none of it away; otherwise SAFE_FIRST_STEP."""
     warmup = min(draft.questions, key=lambda q: q.difficulty, default=None)
     step = draft.first_step.strip()
-    if step and warmup and questions[0].prompt == warmup.prompt and "question 1" in step.lower():
+    if (
+        step and warmup and questions[0].prompt == warmup.prompt and "question 1" in step.lower()
+        and not gives_away(step, questions[0])
+    ):
         return step
-    return f"Read practice question 1 below ({questions[0].topic.replace('_', ' ')}) and write down just the formula or rule you'd use."
+    return SAFE_FIRST_STEP
 
 
 def add_practice(conn: sqlite3.Connection, assignment: Assignment, card: PrepCard) -> PrepCard:
