@@ -50,7 +50,7 @@ class Material(BaseModel):
     kind: MaterialKind
     url: str = ""  # where the student opens it
     pages: list[str] = Field(default_factory=list)
-    note: str = ""  # why there's no text, when there isn't
+    note: str = ""  # why there's no text, or how it was read ("read from a scan by the model")
 
     @property
     def readable(self) -> bool:
@@ -237,18 +237,18 @@ def _cached(key: str, load) -> tuple[list[str], str]:
     the extension uploads later, or a scan the reader couldn't transcribe yet is tried again."""
     path = _cache_path(key)
     if path.exists():
-        pages = json.loads(path.read_text(encoding="utf-8"))["pages"]
-        if pages:  # older entries may hold an empty scan
-            return pages, ""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data["pages"]:  # older entries may hold an empty scan
+            return data["pages"], data.get("note", "")
     try:
         pages, note = load()
     except httpx.HTTPError as e:
         log.warning("reading %s failed: %s", key, e)
         return [], "couldn't download it"
     pages = [p for p in pages if p.strip()]
-    if pages:
+    if pages:  # with how it was read, e.g. "read from a scan by the model"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pages": pages}), encoding="utf-8")
+        path.write_text(json.dumps({"pages": pages, "note": note}), encoding="utf-8")
     return pages, note
 
 

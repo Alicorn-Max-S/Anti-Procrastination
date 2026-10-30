@@ -216,7 +216,7 @@ def _sources(card: PrepCard, docs: list[Material], picked: list[Excerpt]) -> lis
         if d.kind == "feedback" or d.title in have or (d.readable and d.title not in used):
             continue
         have.add(d.title)
-        out.append(SourceFile(name=d.title, url=d.url, read=d.readable, reason="" if d.readable else d.note))
+        out.append(SourceFile(name=d.title, url=d.url, read=d.readable, reason=d.note))
     return out
 
 

@@ -335,6 +335,7 @@ def test_text_cache_keeps_text_but_retries_scans(monkeypatch):
         return result
 
     assert materials._cached("scan", lambda: load(([], materials.SCAN_NOTE))) == ([], materials.SCAN_NOTE)
-    assert materials._cached("scan", lambda: load((["transcribed"], ""))) == (["transcribed"], "")
-    assert materials._cached("scan", lambda: load((["again"], ""))) == (["transcribed"], "")
+    scanned = (["transcribed"], "read from a scan by the model")
+    assert materials._cached("scan", lambda: load(scanned)) == scanned
+    assert materials._cached("scan", lambda: load((["again"], ""))) == scanned  # note kept with the text
     assert len(calls) == 2
