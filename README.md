@@ -60,5 +60,6 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
 | `static/` | The single web page, PWA manifest, service worker, icons |
 | `tests/` | Tests, run with `pytest`; they never touch Canvas, the model or push |
+| `stretch/` | Parked stretch work: the assignment dry run (`stretch/README.md`). Nothing in `app/` imports it |
 
 Real school data (the DB, attachments, test photos) lives under `data/`, which is gitignored. This repo is public.

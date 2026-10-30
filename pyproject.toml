@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+stretch = ["pypdf>=5"]          # stretch/dry_run.py reads attachment PDFs as text
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
