@@ -942,6 +942,7 @@ $("#clock-input").addEventListener("input", renderClockPreview);
 $("#sync-btn").addEventListener("click", async () => {
   $("#sync-btn").disabled = true;
   $("#sync-status").textContent = "Syncing…";
+  if (!syncTimer) syncTimer = setInterval(refresh, 1000); // show progress while the POST runs
   try {
     const r = await post("/api/sync");
     toast(`Synced ${r.assignments} assignments · ${r.cards} new cards · ${r.blocks} new blocks`);
