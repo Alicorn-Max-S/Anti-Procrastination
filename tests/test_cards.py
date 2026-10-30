@@ -1,6 +1,7 @@
 """Homework-card quality: the kind rule, watch-out filtering, reading plans and the notes setting."""
 
 from dataclasses import dataclass
+from datetime import timedelta
 
 import pytest
 
@@ -281,6 +282,13 @@ def test_undo_done_through_the_api(conn):
         r = client.post("/api/assignments/9000204/undone")
         assert r.status_code == 200
         assert not card()["done"] and card()["next_block"] == planned  # its future block is back
+
+        first = next(b for b in db.list_blocks(conn) if b.assignment_id == 9000204)
+        db.save_block(conn, first.model_copy(update={"status": "started"}))
+        client.post("/api/clock", json={"action": "set", "when": first.start.isoformat()})
+        assert card()["next_block"] == first.start.isoformat()  # still running
+        client.post("/api/clock", json={"action": "set", "when": (first.end + timedelta(hours=1)).isoformat()})
+        assert card()["next_block"] != first.start.isoformat()  # over: not "Planned for" its start any more
 
         r = client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "paper"})
         assert r.status_code == 200 and card()["notes_medium"] == "paper"

@@ -252,7 +252,8 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
     done = _done_assignments(blocks)
     next_block: dict[int, Block] = {}
     for b in blocks:
-        if b.status in scheduler.ACTIVE and b.assignment_id not in next_block:
+        ran = b.status == "started" and b.end <= now  # a session already over isn't "Planned for ..."
+        if b.status in scheduler.ACTIVE and not ran and b.assignment_id not in next_block:
             next_block[b.assignment_id] = b
     missed = {  # start-loop: each assignment's unanswered missed start
         b.assignment_id: {"block_id": b.id, "start": b.start.isoformat()}
