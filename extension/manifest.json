@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Start Helper files",
+  "version": "0.1.0",
+  "description": "Fetches the school Google Docs, Slides and Drive files your Canvas assignments link to, with your own sign-in, and sends them to your Start Helper server.",
+  "icons": { "16": "icons/icon.png", "48": "icons/icon.png", "128": "icons/icon.png" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Start Helper files" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "https://docs.google.com/*",
+    "https://drive.google.com/*",
+    "https://drive.usercontent.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://docs.google.com/document/*",
+        "https://docs.google.com/presentation/*",
+        "https://docs.google.com/spreadsheets/*",
+        "https://drive.google.com/file/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

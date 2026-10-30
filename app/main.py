@@ -479,12 +479,13 @@ def extension_needed(conn=Depends(extension_conn)) -> dict:
 class OpenedIn(BaseModel):
     url: str
     opener_url: str = ""  # the Canvas page the doc was opened from, when the extension can see it
+    assignment_id: int | None = None  # picked in the popup: "this is my copy for ..."
 
 
 @app.post("/api/ext/opened")
 def extension_opened(body: OpenedIn, conn=Depends(extension_conn)) -> dict:
     """The student opened a Google doc: should the extension save it?"""
-    return browser_files.opened(conn, body.url, body.opener_url, clock.now())
+    return browser_files.opened(conn, body.url, body.opener_url, clock.now(), body.assignment_id)
 
 
 @app.post("/api/ext/files")

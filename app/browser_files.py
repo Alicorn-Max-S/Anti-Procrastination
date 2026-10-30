@@ -245,11 +245,18 @@ def _waiting(row: sqlite3.Row | None, now: datetime) -> bool:
 
 def needed(conn: sqlite3.Connection, now: datetime) -> dict:
     """What the extension should fetch now: Google files linked from upcoming work that nobody has
-    read yet, and Google Assignments that are still missing the student's copy."""
+    read yet, and Google Assignments that are still missing the student's copy. `watch` is every
+    unread file id, including ones resting after a failure: if the student opens one, the
+    extension tries it then (and only reports opened docs that are on this list or were opened
+    from a Canvas assignment)."""
     files = []
+    watch = []
     for file_id, (r, url, label, assignments) in _links(conn, now).items():
         row = _row(conn, file_id)
-        if _stored(row) or _waiting(row, now) or _read_by_card(conn, file_id, assignments):
+        if _stored(row) or _read_by_card(conn, file_id, assignments):
+            continue
+        watch.append(file_id)
+        if _waiting(row, now):
             continue
         files.append({
             **r.model_dump(), "url": url, "name": label,
@@ -262,7 +269,7 @@ def needed(conn: sqlite3.Connection, now: datetime) -> dict:
         for a in upcoming(conn, now)
         if uses_google_assignments(a) and not copies(a.id, conn)
     ]
-    return {"files": files[:MAX_NEEDED], "copies": waiting_copies}
+    return {"files": files[:MAX_NEEDED], "watch": watch, "copies": waiting_copies}
 
 
 def _copy_target(conn: sqlite3.Connection, assignment_id: int | None, linked: bool) -> Assignment | None:
@@ -275,12 +282,15 @@ def _copy_target(conn: sqlite3.Connection, assignment_id: int | None, linked: bo
     return a
 
 
-def opened(conn: sqlite3.Connection, url: str, opener_url: str, now: datetime) -> dict:
+def opened(
+    conn: sqlite3.Connection, url: str, opener_url: str, now: datetime, assignment_id: int | None = None
+) -> dict:
     """The student opened a Google doc. Should the extension save it, and for which assignment?
 
     Yes when upcoming work links it and it isn't saved yet (even if an earlier try failed: now
     the doc is open, the extension can also fetch it from the page). Also yes when it was opened
-    from a Canvas assignment that uses Google Assignments and has no copy yet: that's the copy.
+    from a Canvas assignment that uses Google Assignments and has no copy yet, or the student
+    picked that assignment in the popup: that's the student's copy.
     """
     r = ref(url)
     if r is None:
@@ -291,12 +301,14 @@ def opened(conn: sqlite3.Connection, url: str, opener_url: str, now: datetime) -
     links = _links(conn, now)
     if r.file_id in links:
         return {**out, "wanted": not _read_by_card(conn, r.file_id, links[r.file_id][3])}
-    m = _CANVAS_ASSIGNMENT.search(opener_url or "")
-    canvas_host = urlparse(settings.canvas_base_url).netloc
-    if m and (not canvas_host or urlparse(opener_url).netloc == canvas_host):
-        a = _copy_target(conn, int(m.group(2)), linked=False)
-        if a is not None and not copies(a.id, conn):
-            return {**out, "wanted": True, "assignment_id": a.id, "assignment": a.name}
+    if assignment_id is None:
+        m = _CANVAS_ASSIGNMENT.search(opener_url or "")
+        canvas_host = urlparse(settings.canvas_base_url).netloc
+        if m and (not canvas_host or urlparse(opener_url).netloc == canvas_host):
+            assignment_id = int(m.group(2))
+    a = _copy_target(conn, assignment_id, linked=False)
+    if a is not None and not copies(a.id, conn):
+        return {**out, "wanted": True, "assignment_id": a.id, "assignment": a.name}
     return out
 
 

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Start Helper files</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="popup">
+  <h1>Start Helper files</h1>
+  <p id="server"></p>
+  <div id="last"></div>
+
+  <div id="copy" class="box" hidden>
+    <p><strong>Is this doc your copy for a Google Assignment?</strong></p>
+    <select id="copy-for"></select>
+    <div class="row">
+      <button id="save-copy">This is my copy</button>
+      <span id="copy-result"></span>
+    </div>
+  </div>
+
+  <div id="copies" hidden>
+    <h2>Waiting for your copy</h2>
+    <p class="hint">Open each from Canvas once; the extension saves your copy the first time.</p>
+    <ul id="copies-list"></ul>
+  </div>
+
+  <div class="row">
+    <button id="run">Fetch now</button>
+    <button id="options" class="quiet">Settings</button>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

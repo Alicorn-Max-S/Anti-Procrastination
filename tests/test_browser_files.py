@@ -128,6 +128,7 @@ def test_failures_rest_before_retrying_and_explain_themselves(seeded):
     assert "DOC_aaaaaaaaaaaaaaaaaaaa" not in ids(at(2, 12))
     assert "DOC_aaaaaaaaaaaaaaaaaaaa" in ids(at(3, 11))  # a day later it's tried again
 
+    assert "DOC_aaaaaaaaaaaaaaaaaaaa" in browser_files.needed(seeded, at(2, 12))["watch"]  # still tried if opened
     browser_files.save_failure(seeded, SLIDES, "signin", now=NOW)
     assert "SLIDES_bbbbbbbbbbbbbbbbb" in ids(at(2, 11, 30))  # sign-in trouble retries within the hour
     with pytest.raises(UploadError):
@@ -159,6 +160,13 @@ def test_opened_doc_from_a_google_assignment_is_the_students_copy(seeded):
     assert not browser_files.opened(seeded, other, page, NOW)["wanted"]  # one copy per assignment
     with pytest.raises(UploadError):
         browser_files.save_upload(seeded, other, PDF, assignment_id=5, now=NOW)
+
+
+def test_a_copy_can_be_picked_by_hand_in_the_popup(seeded):
+    got = browser_files.opened(seeded, COPY, "", NOW, assignment_id=5)
+    assert got["wanted"] and got["assignment_id"] == 5
+    assert not browser_files.opened(seeded, COPY, "", NOW, assignment_id=1)["wanted"]
+    assert not browser_files.opened(seeded, COPY, "", NOW, assignment_id=999)["wanted"]
 
 
 def test_opened_doc_linked_from_canvas_is_wanted_even_after_a_failure(seeded):
