@@ -49,8 +49,22 @@ def save_subscription(conn: sqlite3.Connection, subscription: dict) -> None:
     db.save_subscription(conn, subscription)
 
 
-def send_ping(conn: sqlite3.Connection, title: str, body: str, url: str = "/", tag: str = "") -> int:
-    """Send a push notification to all stored subscriptions. Returns how many went out."""
+def send_ping(
+    conn: sqlite3.Connection,
+    title: str,
+    body: str,
+    url: str = "/",
+    tag: str = "",
+    extra: dict | None = None,
+    skip: str = "",
+) -> int:
+    """Send a push notification to all stored subscriptions except the one whose endpoint is
+    `skip`. Returns how many went out.
+
+    `extra` rides along in the payload for sw.js: `kind` ("ping" | "missed" | "answered"),
+    `block_id` (for the Start now / +15 min buttons), `renotify` (alert again under the same tag)
+    and `clear` (the tags an "answered" push replaces).
+    """
     public_key, private_key = keys(conn)
     if not (public_key and private_key):
         return 0
@@ -59,9 +73,11 @@ def send_ping(conn: sqlite3.Connection, title: str, body: str, url: str = "/", t
     except ImportError:
         log.warning("pywebpush isn't installed; skipping push")
         return 0
-    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag})
+    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag, **(extra or {})})
     sent = 0
     for sub in db.list_subscriptions(conn):
+        if skip and sub["endpoint"] == skip:
+            continue
         try:
             webpush(
                 sub,

@@ -109,6 +109,14 @@
       </section>
     </main>
 
+    <!-- A missed start: sits over the page until it's answered (app.js renderCheckin fills it). -->
+    <div id="miss-modal" class="modal" role="alertdialog" aria-modal="true" aria-labelledby="miss-modal-title" hidden>
+      <div class="modal-box">
+        <h2 id="miss-modal-title" class="modal-title">Missed start</h2>
+        <div id="miss-modal-list" class="modal-list"></div>
+      </div>
+    </div>
+
     <div id="toast" class="toast" role="status" hidden></div>
     <script src="/static/app.js"></script>
   </body>

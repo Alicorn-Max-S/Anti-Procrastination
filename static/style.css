@@ -210,7 +210,34 @@ a.button {
 }
 a.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.pick { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+/* "Pick a time": one-tap times, the free picker, and what the choice would move. */
+.pick { display: grid; gap: 0.45rem; margin-top: 0.6rem; }
+.chips { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+button.chip { border-radius: 999px; padding: 0.3rem 0.75rem; font-size: 0.92rem; }
+button.chip[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+.pick .effect { margin: 0; }
+/* A missed start covers the page until it's answered. */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+  overflow-y: auto;
+}
+.modal-box {
+  width: min(560px, 100%);
+  background: var(--surface);
+  border: 2px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 1rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.modal-title { margin: 0 0 0.6rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--warn); }
+.modal-list { display: grid; gap: 0.75rem; }
+body.modal-open { overflow: hidden; }
 .flash { animation: flash 1.6s ease-out; }
 @keyframes flash { from { box-shadow: 0 0 0 4px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
 
@@ -337,5 +364,5 @@ td.cell.hot small { color: rgba(255, 255, 255, 0.8); }
   border-radius: 8px;
   max-width: calc(100vw - 2rem);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  z-index: 10;
+  z-index: 30; /* above the missed-start modal */
 }

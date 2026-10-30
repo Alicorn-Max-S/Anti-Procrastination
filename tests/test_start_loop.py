@@ -1,15 +1,21 @@
 """The start loop through the HTTP API: what a clock change reports, misses that get a new time
-and keep asking, past-due cards, and push keys. Demo data, seeded Monday Nov 2 at 10 AM:
+and keep asking (and notify again), past-due cards, the "pick a time" preview, push keys, and
+that the background loop pings on time. Demo data, seeded Monday Nov 2 at 10 AM:
 block 1 Problem Set 6 Mon 3 PM (due Tue night), block 2 Lab 4 Mon 4 PM (due Wed night),
 block 3 the quiz Tue 3 PM (due Thu 9 AM)."""
 
+import asyncio
+import threading
+import time
 from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import demo, push
+from app import db, demo, loop, main, push
+from app.clock import clock as sim_clock
 from app.main import app
+from app.models import Assignment, Block
 from tests.conftest import at
 
 PSET, LAB, QUIZ = 9000203, 9000201, 9000202
@@ -49,7 +55,7 @@ def client(conn):
 def test_a_quiet_clock_change_names_the_next_start(client):
     # Max's case: 4:30 AM instead of PM. Nothing fires, and the reply says what's next.
     r = set_clock(client, at(2, 4, 30))
-    assert r["events"] == {"pinged": [], "missed": [], "new": []}
+    assert r["events"] == {"pinged": [], "missed": [], "new": [], "nagged": []}
     assert r["next_start"]["id"] == 1 and r["next_start"]["name"] == "Problem Set 6: Logarithms"
     assert state(client)["next_start"]["id"] == 1
 
@@ -165,3 +171,127 @@ def test_push_setup_endpoint(client):
     assert r["configured"] and r["devices"] == 0
     cfg = state(client)["config"]
     assert cfg["push"] and cfg["push_key"] == r["key"] and cfg["push_devices"] == 0
+
+
+# ---- notifying an unanswered miss again ----------------------------------------------------------
+
+
+def test_an_unanswered_miss_notifies_again_three_times_then_stops(client):
+    set_clock(client, at(2, 15))
+    clock(client, action="advance", minutes=20)  # block 1 missed at 3:20
+    nagged = []
+    for _ in range(5):
+        nagged.append(clock(client, action="advance", minutes=10)["events"]["nagged"])
+    assert nagged == [[1], [1], [1], [], []]
+    [pending] = [b for b in state(client)["checkin"] if b["id"] == 1]
+    assert pending["notified"] == 4
+
+
+def test_answering_stops_the_reminders(client):
+    set_clock(client, at(2, 15))
+    clock(client, action="advance", minutes=20)
+    client.post("/api/blocks/1/checkin", json={"answer": "keep"})
+    assert clock(client, action="advance", minutes=10)["events"]["nagged"] == []
+
+
+def test_no_reminder_once_the_new_time_arrives(client):
+    set_clock(client, at(2, 15))
+    clock(client, action="advance", minutes=20)  # block 1 missed at 3:20
+    [pending] = [b for b in state(client)["checkin"] if b["id"] == 1]
+    again = pending["replacement"]
+    events = set_clock(client, datetime.fromisoformat(again["start"]))["events"]
+    assert again["id"] in events["pinged"] and 1 not in events["nagged"]  # the ping asks instead
+
+
+def test_answering_clears_the_notification_on_other_devices(client, monkeypatch):
+    set_clock(client, at(2, 15))
+    clock(client, action="advance", minutes=20)  # block 1 missed; block 3 replaces it
+    sent = []
+    monkeypatch.setattr(push, "send_ping", lambda conn, title, body, **kw: sent.append((body, kw)))
+    r = client.post("/api/blocks/1/checkin", json={"answer": "keep", "endpoint": "https://push.test/laptop"})
+    new_id = r.json()["block"]["id"]
+    [(body, kw)] = sent
+    assert kw["extra"] == {"kind": "answered", "clear": ["block-1", f"block-{new_id}"]}
+    assert kw["skip"] == "https://push.test/laptop"  # the device that answered clears its own
+    assert "is set for" in body
+
+
+# ---- "pick a time": suggestions and preview --------------------------------------------------------
+
+
+def test_checkin_offers_the_soonest_time_first(client):
+    set_clock(client, at(2, 15, 20))  # block 1 (3 PM) is pinged; block 2 runs 4:00-5:30
+    [pending] = state(client)["checkin"]
+    choices = {c["key"]: datetime.fromisoformat(c["start"]) for c in pending["choices"]}
+    assert pending["choices"][0]["key"] == "soonest"
+    assert choices["soonest"] == at(2, 17, 30)  # 3:45 would run into block 2, so right after it
+    assert choices["in_30"] == at(2, 16)
+
+
+def test_preview_says_what_moves_without_saving(client):
+    set_clock(client, at(2, 15, 20))
+    before = {b["id"]: b["start"] for b in state(client)["blocks"]}
+    r = client.post("/api/blocks/1/preview", json={"answer": "pick_time", "picked_time": at(2, 16).isoformat()})
+    assert r.status_code == 200
+    body = r.json()
+    assert datetime.fromisoformat(body["block"]["start"]) == at(2, 16)
+    [shifted] = body["moved"]
+    assert shifted["id"] == 2 and datetime.fromisoformat(shifted["start"]) == at(2, 17)
+    assert {b["id"]: b["start"] for b in state(client)["blocks"]} == before  # nothing saved
+
+
+# ---- push diagnostics --------------------------------------------------------------------------------
+
+
+def test_the_page_can_report_why_push_failed(client):
+    client.post("/api/push/error", json={"error": "AbortError: Registration failed - push service error", "browser": "Chrome"})
+    assert client.get("/api/health").json()["push_error"]["error"].startswith("AbortError")
+    client.post("/api/push/subscribe", json={"endpoint": "https://push.test/x"})
+    assert client.get("/api/health").json()["push_error"] is None
+
+
+# ---- the background loop pings on time ---------------------------------------------------------------
+
+
+def test_next_due_covers_starts_misses_and_reminders():
+    now = at(2, 15)
+    blocks = [
+        Block(id=1, assignment_id=1, start=at(2, 16), end=at(2, 17)),
+        Block(id=2, assignment_id=2, start=at(2, 14, 50), end=at(2, 15, 50), status="pinged"),
+    ]
+    assert loop.next_due(blocks, now, {}) == at(2, 15, 5)  # block 2's grace runs out first
+    assert loop.next_due(blocks, now, {9: (2, at(2, 14, 52))}) == at(2, 15, 2)  # a reminder is due sooner
+    assert loop.next_due(blocks, now, {9: (4, at(2, 14, 52))}) == at(2, 15, 5)  # reminders used up
+    assert loop.next_due([], now, {}) is None
+
+
+def seed_block_in(conn, seconds: float) -> Block:
+    """One assignment with a block starting `seconds` from now on the (simulated) clock."""
+    start = sim_clock.now() + timedelta(seconds=seconds)
+    db.save_assignment(conn, Assignment(id=1, course_id=1, name="Timing", due_at=start + timedelta(days=1)))
+    b = Block(assignment_id=1, start=start, end=start + timedelta(hours=1))
+    b.id = db.save_block(conn, b)
+    return b
+
+
+@pytest.mark.parametrize("offset_hours", [0, -6])  # real time, and a simulated clock hours behind
+def test_background_loop_pings_within_a_second_of_the_start(conn, offset_hours):
+    sim_clock.advance(timedelta(hours=offset_hours))
+    b = seed_block_in(conn, 1.2)
+    began = time.monotonic()
+    asyncio.run(main._sleep_until_next(15))
+    main._tick_once()
+    waited = time.monotonic() - began
+    assert 1.1 < waited < 2.0
+    ping = db.latest_ping(conn, b.id)
+    assert ping is not None and timedelta(0) <= ping.sent_at - b.start < timedelta(seconds=1)
+
+
+def test_a_clock_change_wakes_the_sleeping_loop(conn):
+    async def sleep_then_measure():
+        began = time.monotonic()
+        threading.Timer(0.2, main.wake_loop).start()  # what POST /api/clock does, from a worker thread
+        await main._sleep_until_next(10)
+        return time.monotonic() - began
+
+    assert asyncio.run(sleep_then_measure()) < 1.0

@@ -120,7 +120,9 @@ async function refresh(reloadCards = false) {
   renderWeek();
   notifyNew();
   updateNotify();
-  document.title = s.checkin.length ? `(${s.checkin.length}) Start Helper` : "Start Helper";
+  updateTitle();
+  closeAnswered();
+  scheduleNextStart();
   if (reloadCards || s.sync.last !== lastSyncSeen) {
     lastSyncSeen = s.sync.last;
     await loadCards();
@@ -249,37 +251,82 @@ $("#sync-dismiss").addEventListener("click", () => {
 
 // ---- check-in ----------------------------------------------------------------------------------
 
-function suggestedTime() {
-  const d = now();
-  const t = new Date(d);
-  if (d.getHours() < 19) t.setHours(19, 0, 0, 0);
-  else t.setHours(d.getHours() + 1, 0, 0, 0);
-  return t;
-}
-
+// Pings stay in the list above the tabs; missed starts go in a modal that sits over the page
+// until each one is answered.
 function renderCheckin() {
-  const key = [notifyPermission(), ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}`)].join(",");
+  const key = [
+    notifyPermission(),
+    ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}:${b.choices?.[0]?.start ?? ""}`),
+  ].join(",");
   if (key === renderedKeys.checkin) return; // don't wipe a time the student is typing
   renderedKeys.checkin = key;
+  const pings = state.checkin.filter((b) => b.status !== "missed");
+  const misses = state.checkin.filter((b) => b.status === "missed");
   const notice = state.checkin.length ? notifyNotice() : null;
-  $("#checkin").replaceChildren(...(notice ? [notice] : []), ...state.checkin.map(checkinBox));
+  const listNotice = notice && !misses.length ? [notice] : [];
+  $("#checkin").replaceChildren(...listNotice, ...pings.map(checkinBox));
+  const modal = $("#miss-modal");
+  const wasOpen = !modal.hidden;
+  modal.hidden = !misses.length;
+  document.body.classList.toggle("modal-open", misses.length > 0);
+  $("#miss-modal-title").textContent = misses.length > 1 ? `${misses.length} missed starts` : "Missed start";
+  $("#miss-modal-list").replaceChildren(...(notice && misses.length ? [notice] : []), ...misses.map(checkinBox));
+  if (misses.length && !wasOpen) modal.querySelector("button.primary")?.focus();
 }
 
-// A time input plus "Pick this time", for check-ins and card alerts.
-function pickControl(blockId, initial) {
-  const pickInput = el("input");
-  pickInput.type = "datetime-local";
-  pickInput.value = toLocalInput(initial);
-  pickInput.setAttribute("aria-label", "Start time");
-  const pick = el("span", "pick");
-  pick.append(
-    pickInput,
-    button("Pick this time", null, () => {
-      if (!pickInput.value) return toast("Choose a time first");
-      answer(blockId, "pick_time", new Date(pickInput.value).toISOString());
-    }),
-  );
-  return pick;
+const CHOICE_LABEL = { soonest: "Soonest", in_30: "In 30 min", in_60: "In 1 hour", tonight: "Tonight", tomorrow: "Tomorrow" };
+
+// "Pick a time": one-tap times from the server (soonest first, and selected), a free picker, and
+// what the choice would do before it's confirmed ("Moves to 4:45 PM. Lab shifts to 6:15 PM.").
+function pickControl(blockId, choices) {
+  const wrap = el("div", "pick");
+  const chips = el("div", "chips");
+  const input = el("input");
+  input.type = "datetime-local";
+  input.setAttribute("aria-label", "Start time");
+  const confirm = button("Pick this time", null, () => {
+    if (!input.value) return toast("Choose a time first");
+    answer(blockId, "pick_time", new Date(input.value).toISOString());
+  });
+  const effect = el("p", "effect muted small");
+  effect.setAttribute("aria-live", "polite");
+  let asked = 0;
+  const select = async (d, chip) => {
+    input.value = toLocalInput(d);
+    chips.querySelectorAll("button").forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
+    confirm.textContent = `Start at ${fmtDayTime(d)}`;
+    const mine = ++asked;
+    try {
+      const r = await post(`/api/blocks/${blockId}/preview`, { answer: "pick_time", picked_time: d.toISOString() });
+      if (mine === asked) effect.textContent = previewText(r);
+    } catch (e) {
+      if (mine === asked) effect.textContent = e.message;
+    }
+  };
+  const list = choices?.length ? choices : [{ key: "soonest", start: new Date(Math.ceil((now().getTime() + 15 * 60_000) / 900_000) * 900_000).toISOString() }];
+  // Before work hours "In 30 min" can be sooner than the default, which then says why it's later.
+  const earliest = Math.min(...list.map((c) => new Date(c.start).getTime()));
+  list.forEach((c) => {
+    const d = new Date(c.start);
+    const when = c.key === "tomorrow" ? fmtDayTime(d) : fmtTime(d);
+    const name = c.key === "soonest" && d.getTime() > earliest ? "In work hours" : CHOICE_LABEL[c.key] || label(c.key);
+    const chip = button(`${name} · ${when}`, "chip", () => select(d, chip));
+    chips.append(chip);
+  });
+  input.addEventListener("change", () => input.value && select(new Date(input.value), null));
+  const row = el("div", "actions");
+  row.append(input, confirm);
+  wrap.append(chips, row, effect);
+  select(new Date(list[0].start), chips.firstChild);
+  return wrap;
+}
+
+// "Moves to Mon 4:45 PM. Lab: Relative Velocity shifts to Mon 6:15 PM."
+function previewText(r) {
+  const parts = [`Moves to ${fmtDayTime(new Date(r.block.start))}${r.block.at_risk ? " (ends after it's due)" : ""}.`];
+  r.moved.forEach((m) => parts.push(`${m.name} shifts to ${fmtDayTime(new Date(m.start))}${m.at_risk ? " (after it's due)" : ""}.`));
+  if (!r.moved.length) parts.push("Nothing else moves.");
+  return parts.join(" ");
 }
 
 function checkinBox(b) {
@@ -298,8 +345,8 @@ function checkinBox(b) {
   const actions = el("div", "actions");
   actions.append(button("Start now", "primary", () => answer(b.id, "start_now")));
   if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(b.id, "keep")));
-  actions.append(button("+15 min", null, () => answer(b.id, "plus_15")), pickControl(b.id, again || suggestedTime()));
-  box.append(actions);
+  actions.append(button("+15 min", null, () => answer(b.id, "plus_15")));
+  box.append(actions, pickControl(b.id, b.choices));
   return box;
 }
 
@@ -346,16 +393,26 @@ function cardAlert(c) {
     const actions = el("div", "actions");
     actions.append(button("Start now", "primary", () => answer(c.missed.block_id, "start_now")));
     if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(c.missed.block_id, "keep")));
-    actions.append(pickControl(c.missed.block_id, again || suggestedTime()));
-    box.append(actions);
+    const entry = state?.checkin.find((b) => b.id === c.missed.block_id);
+    box.append(actions, pickControl(c.missed.block_id, entry?.choices));
     return box;
   }
   return null;
 }
 
+// This browser's push endpoint, so the server tells only the student's other devices to clear
+// their notification (this page closes its own).
+async function pushEndpoint() {
+  try {
+    return (await (await swReady)?.pushManager?.getSubscription())?.endpoint || "";
+  } catch {
+    return "";
+  }
+}
+
 async function answer(blockId, ans, pickedTime) {
   try {
-    const r = await post(`/api/blocks/${blockId}/checkin`, { answer: ans, picked_time: pickedTime ?? null });
+    const r = await post(`/api/blocks/${blockId}/checkin`, { answer: ans, picked_time: pickedTime ?? null, endpoint: await pushEndpoint() });
     movedIds = new Set([...r.moved, r.block.id]); // r.block is the new block when a miss was answered
     renderedKeys.week = "";
     if (ans === "start_now") toast(r.block.first_step ? `Go: ${r.block.first_step}` : "Go!", 6000);
@@ -995,7 +1052,9 @@ async function syncPush() {
     pushError = "";
   } catch (e) {
     pushState = "failed";
-    pushError = e.message;
+    pushError = `${e.name}: ${e.message}`;
+    // so /api/health shows why push is off on this machine
+    post("/api/push/error", { error: pushError, browser: navigator.userAgent }).catch(() => {});
   }
 }
 
@@ -1046,6 +1105,7 @@ async function enableNotifications() {
   }
   if (pushState !== "on") await syncPush();
   updateNotify();
+  if (pushState === "failed") toast(`Push didn't work (${pushError}), so pings arrive while this page is open.`, 9000);
   await testNotification();
 }
 $("#notify-btn").addEventListener("click", enableNotifications);
@@ -1058,65 +1118,158 @@ async function testNotification() {
       const r = await post("/api/push/test");
       if (r.sent) return toast(`Test sent by push. ${help}`, 9000);
     }
-    const shown = await showLocalNotification("Start Helper", "Notifications work.", "test");
+    const shown = await showLocalNotification("Start Helper", { body: "Notifications work.", tag: "test", data: { url: "/" } });
     toast(shown ? `Test notification shown. ${help}` : "The browser refused to show a notification.", 9000);
   } catch (e) {
     toast(e.message);
   }
 }
 
-// Through the service worker when there is one (needed on Android), else the page's own.
-async function showLocalNotification(title, body, blockId) {
-  const opts = {
-    body,
-    tag: blockId === "test" ? "test" : `block-${blockId}`,
-    icon: "/static/icons/icon-192.png",
-    data: { url: blockId === "test" ? "/" : `/?block=${blockId}` },
+// The same options sw.js gives a pushed ping: Start now / +15 min / Pick a time buttons, and a
+// missed start stays on screen until answered (and buzzes a phone).
+const NOTIFY_ACTIONS = [
+  { action: "start_now", title: "Start now" },
+  { action: "plus_15", title: "+15 min" },
+  { action: "pick", title: "Pick a time" },
+];
+
+function notifyOptions(b, renotify) {
+  const missed = b.status === "missed";
+  const again = missed && b.replacement ? `New time: ${fmtDayTime(new Date(b.replacement.start))}. Tap to change it.` : "When will you start? Tap to pick a time.";
+  return {
+    body: missed ? again : b.first_step || "Open your prep card.",
+    tag: `block-${b.id}`,
+    data: { url: `/?block=${b.id}`, block_id: b.id, kind: missed ? "missed" : "ping" },
+    requireInteraction: missed,
+    renotify,
+    vibrate: missed ? [300, 100, 300, 100, 300] : [200, 100, 200],
+    actions: NOTIFY_ACTIONS,
   };
+}
+
+// Through the service worker when there is one (needed on Android and for the buttons), else the
+// page's own (no buttons there).
+async function showLocalNotification(title, opts) {
+  const full = { icon: "/static/icons/icon-192.png", badge: "/static/icons/icon-192.png", ...opts };
   try {
     const reg = await swReady;
     if (reg) {
-      await reg.showNotification(title, opts);
+      await reg.showNotification(title, full);
       return true;
     }
-    new Notification(title, opts);
+    const { actions, ...plain } = full;
+    new Notification(title, plain);
     return true;
   } catch {
     return false;
   }
 }
 
-// New pings and misses found by polling: a notification (push may have shown it already; the
-// same tag replaces it rather than doubling it), a toast, and the tab title counts them.
+// New pings, misses and reminders found by polling: a notification (push may have shown it
+// already: the same tag replaces it, and only alerts again when push isn't doing it), a toast or
+// chime, and the title. A reminder is a miss whose `notified` count went up.
 function notifyNew() {
-  const keys = state.checkin.map((b) => `${b.id}:${b.status}`);
+  const keyOf = (b) => `${b.id}:${b.status}:${b.notified ?? 0}`;
   if (firstPoll) {
-    keys.forEach((k) => notified.add(k));
+    state.checkin.forEach((b) => notified.add(keyOf(b)));
     firstPoll = false;
     return;
   }
-  const fresh = state.checkin.filter((b) => !notified.has(`${b.id}:${b.status}`));
+  const fresh = state.checkin.filter((b) => !notified.has(keyOf(b)));
   for (const b of fresh) {
-    notified.add(`${b.id}:${b.status}`);
+    notified.add(keyOf(b));
     if (notifyPermission() !== "granted") continue;
     const missed = b.status === "missed";
-    const again = missed && b.replacement ? `New time: ${fmtDayTime(new Date(b.replacement.start))}. Tap to change it.` : "When will you start? Tap to pick a time.";
-    showLocalNotification(
-      missed ? `Missed start: ${b.name}` : `Time to start: ${b.name}`,
-      missed ? again : b.first_step || "Open your prep card.",
-      b.id,
-    );
+    const renotify = missed && (b.notified ?? 1) > 1 && pushState !== "on";
+    showLocalNotification(missed ? `Missed start: ${b.name}` : `Time to start: ${b.name}`, notifyOptions(b, renotify));
   }
+  if (fresh.some((b) => b.status === "missed")) chime();
   if (fresh.length && !clockJustMoved) {
     const b = fresh[0];
-    toast(b.status === "missed" ? `Missed start: ${b.name}` : `Time to start: ${b.name}`, 6000);
-    flash(document.getElementById(`checkin-${b.id}`));
+    if (b.status !== "missed") {
+      toast(`Time to start: ${b.name}`, 6000);
+      flash(document.getElementById(`checkin-${b.id}`));
+    }
   }
+}
+
+// Answered somewhere else (another device, a notification button): its notification goes too.
+async function closeAnswered() {
+  const reg = await swReady;
+  if (!reg?.getNotifications) return;
+  const live = new Set(state.checkin.map((b) => `block-${b.id}`));
+  try {
+    (await reg.getNotifications()).forEach((n) => n.tag.startsWith("block-") && !live.has(n.tag) && n.close());
+  } catch {}
+}
+
+// The tab title counts check-ins, and flashes the missed start's name while one is waiting.
+let titleTimer = null;
+let titleFlip = false;
+function updateTitle() {
+  const base = state.checkin.length ? `(${state.checkin.length}) Start Helper` : "Start Helper";
+  const miss = state.checkin.find((b) => b.status === "missed");
+  if (!miss) {
+    clearInterval(titleTimer);
+    titleTimer = null;
+    document.title = base;
+    return;
+  }
+  const alertTitle = `Missed start: ${miss.name}`;
+  if (titleTimer) clearInterval(titleTimer);
+  titleTimer = setInterval(() => {
+    titleFlip = !titleFlip;
+    document.title = titleFlip ? alertTitle : base;
+  }, 1000);
+}
+
+// A short two-note chime. Browsers only allow sound after the student has clicked or typed on the
+// page once, so the audio context is made (or resumed) on the first click or key press.
+let audio = null;
+function unlockAudio() {
+  try {
+    audio = audio || new AudioContext();
+    if (audio.state === "suspended") audio.resume();
+  } catch {}
+}
+document.addEventListener("pointerdown", unlockAudio);
+document.addEventListener("keydown", unlockAudio);
+
+function chime() {
+  if (!audio || audio.state !== "running") return false;
+  const t0 = audio.currentTime;
+  [880, 660].forEach((freq, i) => {
+    const t = t0 + i * 0.18;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t);
+    osc.stop(t + 0.17);
+  });
+  return true;
+}
+
+// Polling runs every 10 s; this lands a refresh just after the next start (and the next miss), so
+// the page's own notification is on time too. Set from a fetch callback, not a timer, so Chrome's
+// background-tab throttling of chained timers doesn't apply.
+let startTimer = null;
+function scheduleNextStart() {
+  clearTimeout(startTimer);
+  const times = [];
+  if (state.next_start) times.push(new Date(state.next_start.start).getTime());
+  state.checkin.filter((b) => b.status === "pinged").forEach((b) => times.push(new Date(b.start).getTime() + 15 * 60_000));
+  const ms = Math.min(...times.map((t) => t - now().getTime()).filter((d) => d > -1000)) + 800;
+  if (Number.isFinite(ms) && ms < 60 * 60_000) startTimer = setTimeout(() => refresh(), Math.max(ms, 0));
 }
 
 // A tap on a notification while the page is open: the service worker focuses it and says which block.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", async (e) => {
+    if (e.data?.type === "answered") return refresh(true);
     if (e.data?.type !== "open-block") return;
     await refresh(true);
     focusBlock(e.data.blockId);

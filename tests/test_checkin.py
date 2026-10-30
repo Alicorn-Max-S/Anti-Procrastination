@@ -88,3 +88,51 @@ def test_keep_leaves_the_block_and_records_it():
     blocks, ping = apply_answer(week() + [b], 5, "keep", at(2, 16, 30), window=WINDOW)
     assert next(x for x in blocks if x.id == 5).start == at(2, 17)
     assert ping.answer == "keep" and ping.picked_time is None and ping.started_at is None
+
+
+# ---- "pick a time" suggestions -------------------------------------------------------------------
+
+
+def one(start, end, id=1, status="missed"):
+    return Block(id=id, assignment_id=id * 10, start=start, end=end, status=status)
+
+
+def starts(blocks, block_id, now, due=None):
+    from app.checkin import choices
+
+    return {c["key"]: c["start"] for c in choices(blocks, block_id, now, due, window=WINDOW)}
+
+
+def test_soonest_is_the_next_quarter_hour_at_least_15_minutes_out():
+    # Max's case: a 4:30 PM start missed at 4:30. Not 7 PM: 4:45.
+    miss = one(at(2, 16, 30), at(2, 18))
+    assert starts([miss], 1, at(2, 16, 30), due=at(3, 23))["soonest"] == at(2, 16, 45)
+    assert starts([miss], 1, at(2, 16, 31), due=at(3, 23))["soonest"] == at(2, 17)
+
+
+def test_soonest_stays_in_the_work_window_and_clear_of_other_blocks():
+    miss = one(at(2, 16), at(2, 17))
+    other = one(at(2, 16, 45), at(2, 17, 45), id=2, status="planned")
+    assert starts([miss, other], 1, at(2, 16, 30), due=at(3, 23))["soonest"] == at(2, 17, 45)
+    assert starts([miss], 1, at(2, 10), due=at(3, 23))["soonest"] == at(2, 15)  # school hours: 3 PM
+    assert starts([miss], 1, at(2, 20, 50), due=at(4, 23))["soonest"] == at(3, 15)  # after 9 PM: tomorrow
+
+
+def test_soonest_leaves_the_window_rather_than_miss_the_due_date():
+    miss = one(at(2, 8), at(2, 9))
+    assert starts([miss], 1, at(2, 10), due=at(2, 13))["soonest"] == at(2, 10, 15)
+
+
+def test_one_tap_choices_show_real_times_and_respect_the_due_date():
+    miss = one(at(2, 16, 30), at(2, 17, 30))
+    s = starts([miss], 1, at(2, 16, 30), due=at(4, 23))
+    assert s == {
+        "soonest": at(2, 16, 45),
+        "in_30": at(2, 17),
+        "in_60": at(2, 17, 30),
+        "tonight": at(2, 19),
+        "tomorrow": at(3, 15),
+    }
+    # due tonight at 8: "tonight" (7-8 PM) still fits, tomorrow doesn't
+    assert "tomorrow" not in starts([miss], 1, at(2, 16, 30), due=at(2, 20))
+    assert "tonight" not in starts([miss], 1, at(2, 16, 30), due=at(2, 19, 30))
