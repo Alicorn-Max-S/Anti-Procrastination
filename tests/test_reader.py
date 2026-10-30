@@ -191,3 +191,21 @@ def test_extension_upload_beats_the_school_only_link(internet, monkeypatch, tmp_
     html = f'<p><a href="{DRIVE}">the problems</a></p>'
     [doc] = reader.read_assignment(Assignment(id=33, course_id=1, name="Calc", description_html=html))
     assert doc.readable and doc.name == "AP Calc problems" and "Derivative problems" in doc.text
+
+
+def test_page_view_uploads_say_where_their_text_came_from(internet, monkeypatch, tmp_path):
+    from app import browser_files
+
+    text = tmp_path / "google-1SchoolOnlyAbCdEfGhIjKl.txt"
+    text.write_text("(Read from the page view: the teacher turned off downloading.)\nDerivative problems 1-10")
+    copy = tmp_path / "google-1MyCopyAbCdEfGhIjKlMnO.txt"
+    copy.write_text("(Read from the page view: the teacher turned off downloading.)\nMy lab answers")
+    saved = browser_files.Stored(file_id="1SchoolOnlyAbCdEfGhIjKl", url=DRIVE, path=text, title="AP Calc problems", via="page")
+    mine = browser_files.Stored(file_id="1MyCopyAbCdEfGhIjKlMnO", url=DOC, path=copy, title="Lab copy", via="page")
+    monkeypatch.setattr(browser_files, "stored", lambda url, conn=None: saved if "1SchoolOnly" in url else None)
+    monkeypatch.setattr(browser_files, "copies", lambda assignment_id, conn=None: [mine])
+    html = f'<p><a href="{DRIVE}">the problems</a></p>'
+    docs = reader.read_assignment(Assignment(id=34, course_id=1, name="Calc", description_html=html))
+    assert [(d.name, d.readable, d.reason) for d in docs] == [
+        ("Lab copy", True, reader.PAGE_VIEW), ("AP Calc problems", True, reader.PAGE_VIEW)]
+    assert "Derivative problems" in docs[1].text and docs[1].source().read

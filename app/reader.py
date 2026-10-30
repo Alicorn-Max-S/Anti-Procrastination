@@ -56,7 +56,7 @@ class Doc(BaseModel):
     kind: DocKind = "file"
     path: str = ""  # local file, when it was downloaded
     readable: bool = False
-    reason: str = ""  # why not, when it isn't readable (or why there's no text)
+    reason: str = ""  # why not, when it isn't readable (or why there's no text, or where it came from)
     pdf_pages: int = 0
     pages: list[str] = Field(default_factory=list)  # text per PDF page (or one entry for a text doc)
     book_pages: list[BookPage] = Field(default_factory=list)  # spreads split into their two pages
@@ -351,11 +351,22 @@ def _canvas_file(endpoint: str, label: str, folder: Path) -> Doc:
     return read_document(got.path, name=got.name or label, url=got.url, kind="file")
 
 
+PAGE_VIEW = "read from the page view: downloading is turned off"
+
+
+def _uploaded(saved: browser_files.Stored, name: str, url: str) -> Doc:
+    """A file the Chrome extension uploaded, read like a downloaded one."""
+    doc = read_document(saved.path, name=saved.title or name, url=url, kind="google")
+    if doc.readable and saved.via == "page":
+        doc = doc.model_copy(update={"reason": PAGE_VIEW})
+    return doc
+
+
 def _google_file(url: str, label: str, folder: Path) -> Doc:
     """A Google file: the copy the Chrome extension uploaded if there is one, else a public download."""
     saved = browser_files.stored(url)
     if saved is not None:
-        return read_document(saved.path, name=saved.title or label, url=url, kind="google")
+        return _uploaded(saved, label, url)
     got = gdocs.fetch(url, folder)
     if got.path is None:
         # the extension fetches signed in, so its reason (e.g. downloads turned off) is the truer one
@@ -365,10 +376,7 @@ def _google_file(url: str, label: str, folder: Path) -> Doc:
 
 def _assignment_copies(assignment: Assignment) -> list[Doc]:
     """The student's Google Assignments copy, when the extension has uploaded it."""
-    return [
-        read_document(s.path, name=s.title or "Your copy (Google Assignments)", url=s.url, kind="google")
-        for s in browser_files.copies(assignment.id)
-    ]
+    return [_uploaded(s, "Your copy (Google Assignments)", s.url) for s in browser_files.copies(assignment.id)]
 
 
 def _canvas_page(url: str, label: str, folder: Path) -> Doc:
