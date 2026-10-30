@@ -317,3 +317,24 @@ def test_outline_budget_goes_to_review_sheets_before_slides():
     text = materials.outline_text(unit, [slides, review], max_chars=1_200)
     assert len(text) <= 1_300 and text.count("problem ") == 10
     assert "- Presentation (30 pages)" in text and "more" in text.split("- Test Review")[0]
+
+
+def test_outline_is_text_or_empty(course, canvas_api, google, monkeypatch):
+    assert materials.outline(course, TEST).startswith("Unit: Unit 2: Vectors (Canvas module)")
+    lonely = Assignment(id=99, course_id=COURSE, name="Pop Quiz", kind="test")
+    assert materials.outline(course, lonely) == ""  # in no module, nothing nearby
+    monkeypatch.setattr(materials, "find_unit", lambda conn, a: 1 / 0)
+    assert materials.outline(course, TEST) == ""
+
+
+def test_text_cache_keeps_text_but_retries_scans(monkeypatch):
+    calls = []
+
+    def load(result):
+        calls.append(result)
+        return result
+
+    assert materials._cached("scan", lambda: load(([], materials.SCAN_NOTE))) == ([], materials.SCAN_NOTE)
+    assert materials._cached("scan", lambda: load((["transcribed"], ""))) == (["transcribed"], "")
+    assert materials._cached("scan", lambda: load((["again"], ""))) == (["transcribed"], "")
+    assert len(calls) == 2

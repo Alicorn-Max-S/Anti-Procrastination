@@ -233,21 +233,22 @@ def _cache_path(key: str) -> Path:
 
 
 def _cached(key: str, load) -> tuple[list[str], str]:
-    """Pages for a source, read once. Text and "it's a scan" are stored; other failures aren't, so
-    a failed download (or a school-only doc the extension uploads later) is tried again next time."""
+    """Pages for a source, read once. Only text is stored, so a failed download, a school-only doc
+    the extension uploads later, or a scan the reader couldn't transcribe yet is tried again."""
     path = _cache_path(key)
     if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data["pages"], data.get("note", "")
+        pages = json.loads(path.read_text(encoding="utf-8"))["pages"]
+        if pages:  # older entries may hold an empty scan
+            return pages, ""
     try:
         pages, note = load()
     except httpx.HTTPError as e:
         log.warning("reading %s failed: %s", key, e)
         return [], "couldn't download it"
     pages = [p for p in pages if p.strip()]
-    if pages or note == SCAN_NOTE:
+    if pages:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pages": pages, "note": note}), encoding="utf-8")
+        path.write_text(json.dumps({"pages": pages}), encoding="utf-8")
     return pages, note
 
 
@@ -598,3 +599,13 @@ def outline_text(unit: Unit, docs: list[DocOutline], max_chars: int = OUTLINE_CH
         if n < len(d_parts):
             lines.append(f"    … {len(d_parts) - n} more")
     return "\n".join(lines)
+
+
+def outline(conn: sqlite3.Connection, assignment: Assignment) -> str:
+    """The unit outline as prompt text for a card, or "" when no document in the unit could be read."""
+    try:
+        unit, docs = unit_outline(conn, assignment)
+    except Exception as e:  # the outline only improves a card; never fail one over it
+        log.warning("unit outline for %s failed: %s", assignment.id, e)
+        return ""
+    return outline_text(unit, docs) if any(d.readable for d in docs) else ""
