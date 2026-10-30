@@ -397,7 +397,7 @@ function renderPractice(c) {
   box.append(el("h3", null, c.practice.length ? `Practice set (${c.practice.length})` : "Practice set"));
   if (c.focus) box.append(el("p", "focus", c.focus));
   if (!c.practice.length) {
-    box.append(el("p", "muted small", "Add graded tests on the Dashboard and set META_API_KEY to get questions aimed at these."));
+    box.append(el("p", "muted small", "Set META_API_KEY to get questions from this unit's documents. Add graded tests on the Dashboard to aim them at your weak spots."));
     return box;
   }
   const ol = el("ol");
@@ -415,10 +415,24 @@ function renderPractice(c) {
       el("span", "badge", label(q.qtype)),
       el("span", `badge ${q.verified ? "ok" : "warn"}`, q.verified ? "answer double-checked" : "answer unchecked"),
     );
+    li.append(meta);
+    if (q.source) {
+      const from = el("div", "q-source", "From ");
+      if (/^https?:\/\//i.test(q.source_url || "")) {
+        const a = el("a", null, q.source);
+        a.href = q.source_url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        from.append(a);
+      } else {
+        from.append(q.source);
+      }
+      li.append(from);
+    }
     const det = el("details");
     det.append(el("summary", null, "Show answer"), el("p", null, q.answer));
     if (q.explanation) det.append(el("p", "muted small", q.explanation));
-    li.append(meta, det);
+    li.append(det);
     ol.append(li);
   });
   box.append(ol);

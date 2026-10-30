@@ -181,6 +181,14 @@ def test_excerpts_cover_every_document_before_seconds_and_respect_the_budget():
     assert picked[-1].label == "Review"  # one-page documents have no page number
 
 
+def test_excerpts_fill_with_review_sheets_before_labs():
+    lab = _doc("Lab: Force Table", *(f"lab page {i} " + "v" * 300 for i in range(5)))
+    review = _doc("Test Review: Vectors", *(f"review page {i} " + "v" * 300 for i in range(5)))
+    picked = materials.excerpts([lab, review], "vectors", budget=2_000)
+    titles = [e.title for e in picked]
+    assert titles.count("Lab: Force Table") == 1 and titles.count("Test Review: Vectors") == 5
+
+
 def test_chunks_split_long_pages():
     doc = _doc("Long", "\n\n".join(f"Paragraph {i} " + "x" * 400 for i in range(10)))
     chunks = materials._chunks(doc)

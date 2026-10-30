@@ -203,6 +203,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .practice details { margin: 0.2rem 0 0; }
 .practice details summary { font-weight: 500; color: var(--accent); font-size: 0.9rem; }
 .q-meta { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.15rem; }
+.q-source { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
 
 /* ---- week ---- */
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.5rem; margin-bottom: 0.75rem; }

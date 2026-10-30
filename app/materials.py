@@ -26,7 +26,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from app import canvas, convert, db, gdocs
+from app import canvas, db, gdocs, reader
 from app.config import settings
 from app.models import Assignment, Link
 
@@ -199,16 +199,11 @@ def _tidy(text: str) -> str:
 
 
 def read_file(path: Path) -> tuple[list[str], str]:
-    """Text per page of a downloaded file through the document reader, and why not when there's none."""
-    try:
-        from app import reader  # the ingest lane's reader; plain text still works without it
-    except ImportError:
-        if path.suffix.lower() in convert.TEXT:
-            return [_tidy(path.read_text(encoding="utf-8", errors="replace"))], ""
-        return [], "no document reader"
-    doc = reader.read_document(path)
-    pages = [p for p in doc.pages if p.strip()]
-    return (pages, "") if pages else ([], doc.reason or "no text in it (a scan?)")
+    """Text per page of a downloaded file (via the document reader), and why not when there's none."""
+    pages, reason = reader.text_pages(path)
+    if not pages and reader.read_document(path).readable:  # both cached
+        reason = "a scan with no text to read"
+    return pages, reason
 
 
 def _google_pages(url: str, folder: Path) -> tuple[list[str], str]:
@@ -224,7 +219,7 @@ def _google_pages(url: str, folder: Path) -> tuple[list[str], str]:
     path = gdocs.download(url, folder)
     if path is None:
         return [], "shared only inside the school"
-    return read_file(convert.model_readable(path) or path)
+    return read_file(path)
 
 
 def _cache_path(key: str) -> Path:
@@ -284,10 +279,7 @@ def _canvas_file_pages(endpoint: str, course_id: int) -> tuple[list[str], str]:
     path = canvas.download_file(endpoint, _files_dir(course_id))
     if path is None:
         return [], "too big or no longer on Canvas"
-    readable = convert.model_readable(path)
-    if readable is None:
-        return [], f"can't read {path.suffix} files"
-    return read_file(readable)
+    return read_file(path)
 
 
 def _feedback(a: Assignment) -> Material | None:
@@ -341,14 +333,13 @@ def _page_html(key: str, course_id: int, page_url: str) -> str:
     if not _has_canvas():
         return ""
     try:
-        with canvas._client() as c:
-            r = c.get(f"/api/v1/courses/{course_id}/pages/{page_url}")
+        page = canvas.fetch_page(course_id, page_url)
     except httpx.HTTPError as e:
         log.warning("page %s failed: %s", page_url, e)
         return ""
-    if r.status_code != 200:
+    if page is None:
         return ""
-    html = r.json().get("body") or ""
+    html = page.get("body") or ""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"html": html}), encoding="utf-8")
     return html
@@ -396,26 +387,48 @@ def _chunks(material: Material) -> list[tuple[int | None, str]]:
     return out
 
 
+# Which documents fill the budget first, after every document has one excerpt in: the ones that
+# show how the class asks questions, then homework, then notes and slides, then labs.
+_PRIORITY = [
+    (r"\b(review|practice|study guide|sample|key|answers?|quiz|test|exam)\b", 0),
+    (r"\b(homework|hw|problems?|worksheet|exercises?)\b", 1),
+    (r"\b(labs?|project|inquiry|activity|activities)\b", 3),
+]
+
+
+def _priority(title: str) -> int:
+    return next((rank for pattern, rank in _PRIORITY if re.search(pattern, title.lower())), 2)
+
+
 def excerpts(materials: list[Material], topic: str, budget: int = BUDGET_CHARS) -> list[Excerpt]:
-    """The parts of the unit worth sending: every readable document gets its best-matching chunk
-    before any document gets a second, until the budget runs out. Returned in document order."""
+    """The parts of the unit worth sending: every readable document gets its best-matching chunk,
+    then the rest of the budget goes to review sheets and homework before slides, and slides
+    before labs, taking turns within each group. Returned in document order."""
     words = stems(topic)
     queues: list[list[tuple[int, int, int | None, str]]] = []
-    for d, m in enumerate(materials):
+    for m in materials:
         scored = [(len(words & stems(text)), i, page, text) for i, (page, text) in enumerate(_chunks(m))]
         queues.append(sorted(scored, key=lambda s: (-s[0], s[1])))
     picked: list[tuple[int, int, int | None, str]] = []  # (doc, chunk, page, text)
     used = 0
-    while any(queues) and used < budget:
-        for d, q in enumerate(queues):
-            if not q:
+
+    def take(group: list[int]) -> None:
+        nonlocal used
+        for d in group:
+            if not queues[d]:
                 continue
-            _, i, page, text = q.pop(0)
+            _, i, page, text = queues[d].pop(0)
             if used + len(text) > budget:
-                q.clear()  # this document's next chunk doesn't fit; let the others use the rest
+                queues[d].clear()  # this document's next chunk doesn't fit; let the others use the rest
                 continue
             picked.append((d, i, page, text))
             used += len(text)
+
+    take(list(range(len(materials))))
+    for rank in sorted({_priority(m.title) for m in materials}):
+        group = [d for d, m in enumerate(materials) if _priority(m.title) == rank]
+        while any(queues[d] for d in group) and used < budget:
+            take(group)
     picked.sort(key=lambda p: (p[0], p[1]))
     return [
         Excerpt(id=f"S{n}", title=materials[d].title, url=materials[d].url, page=page, text=text)
