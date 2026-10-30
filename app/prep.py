@@ -42,7 +42,7 @@ from app.progress import Progress
 
 log = logging.getLogger(__name__)
 
-CARD_WORKERS = 4  # model cards built at once during a sync
+CARD_WORKERS = 5  # model cards built at once during a sync (= the default MAX_CARDS_PER_SYNC)
 
 
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
