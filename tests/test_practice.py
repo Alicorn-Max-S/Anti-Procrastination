@@ -51,7 +51,7 @@ def canvas_api(monkeypatch):
         if path.endswith("/pages/unit-vectors"):
             return httpx.Response(200, json={"body": '<p><iframe title="Unit Vectors Key" src="https://docs.google.com/document/d/AAAAAAAAAAAAAAAAAAAAAAAA/preview"></iframe></p>'})
         if path.endswith("/pages/key-hw"):
-            return httpx.Response(200, json={"body": "<p>1. The boat moves at 5 m/s, 37 degrees from the bank, by Pythagoras.</p>"})
+            return httpx.Response(200, json={"body": "<p>1. The boat moves at 5 m/s, 37 degrees from the bank, by Pythagoras.</p><p>2. 1500 m / 4 m/s = 375 s</p>"})
         if path.endswith("/pages/extra"):
             return httpx.Response(200, json={"body": '<iframe src="https://docs.google.com/document/d/CCCCCCCCCCCCCCCCCCCCCCCC/preview"></iframe>'})
         if path.endswith("/files/501"):
@@ -300,12 +300,13 @@ def test_unit_outline_marks_answer_keys_and_unread_docs(course, canvas_api, goog
     by_title = {d.title: d for d in docs}
     assert unit.name == "Unit 2: Vectors" and "Feedback on Vectors HW" not in by_title
     assert by_title["KEY: Vectors HW"].answer_key and not by_title["Unit Vectors Practice"].answer_key
+    assert by_title["KEY: Vectors HW"].parts == []  # worked answers stay out
     assert [p.label for p in by_title["Unit Vectors Practice"].parts] == ["problem 1", "problem 2"]
     text = materials.outline_text(unit, docs)
     assert text.startswith("Unit: Unit 2: Vectors (Canvas module)")
     assert "- KEY: Vectors HW (answer key: for checking answers only)" in text
     assert "- Extra Practice (not read: shared only inside the school)" in text
-    assert "    problem 2: Write <6, 8> in i, j form." in text
+    assert "    problem 2: Write <6, 8> in i, j form." in text and "375 s" not in text
 
 
 def test_outline_budget_goes_to_review_sheets_before_slides():

@@ -552,15 +552,18 @@ def _parts(m: Material) -> list[Part]:
 
 def unit_outline(conn: sqlite3.Connection, assignment: Assignment) -> tuple[Unit, list[DocOutline]]:
     """The unit this assignment belongs to and an outline of each of its documents, in module order.
-    No model calls; Canvas and Google reads are cached, so add_practice reuses them."""
+    Answer keys get no parts: their lines are worked answers. No model calls; Canvas and Google
+    reads are cached, so add_practice reuses them."""
     unit = find_unit(conn, assignment)
-    out = [
-        DocOutline(
-            title=m.title, url=m.url, kind=m.kind, answer_key=is_answer_key(m.title), readable=m.readable,
-            note=m.note, pages=len(m.pages), parts=_parts(m),
-        )
-        for m in gather(conn, assignment, unit) if m.kind != "feedback"
-    ]
+    out = []
+    for m in gather(conn, assignment, unit):
+        if m.kind == "feedback":
+            continue
+        key = is_answer_key(m.title)
+        out.append(DocOutline(
+            title=m.title, url=m.url, kind=m.kind, answer_key=key, readable=m.readable,
+            note=m.note, pages=len(m.pages), parts=[] if key else _parts(m),
+        ))
     return unit, out
 
 
