@@ -254,9 +254,13 @@ $("#sync-dismiss").addEventListener("click", () => {
 // Pings stay in the list above the tabs; missed starts go in a modal that sits over the page
 // until each one is answered.
 function renderCheckin() {
+  // "In 15 min" moves with the clock: relabel it in place rather than redraw (which would close an
+  // open picker).
+  const in15 = `In 15 min · ${fmtDayTime(new Date(now().getTime() + 15 * 60_000))}`;
+  document.querySelectorAll("button[data-in15]").forEach((btn) => (btn.textContent = in15));
   const key = [
     notifyPermission(),
-    ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}:${b.choices?.[0]?.start ?? ""}`),
+    ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}:${(b.choices || []).map((c) => (c.key === "in_15" ? c.key : c.start)).join("|")}`),
   ].join(",");
   if (key === renderedKeys.checkin) return; // don't wipe a time the student is typing
   renderedKeys.checkin = key;
@@ -274,58 +278,89 @@ function renderCheckin() {
   if (misses.length && !wasOpen) modal.querySelector("button.primary")?.focus();
 }
 
-const CHOICE_LABEL = { soonest: "Soonest", in_30: "In 30 min", in_60: "In 1 hour", tonight: "Tonight", tomorrow: "Tomorrow" };
+// The check-in's buttons, on the page and on notifications (sw.js posts `answer` and
+// `picked_time`): Start now; "In 15 min" and/or "Next work time" from the server's `choices`, each
+// with its day and time; Pick a time…. A missed block is already planned at its next work time,
+// so that button keeps it there rather than moving it.
+function startOptions(b) {
+  const out = [{ action: "start_now", title: "Start now", answer: "start_now" }];
+  for (const c of b.choices || []) {
+    const d = new Date(c.start);
+    if (c.key === "in_15") out.push({ action: "in_15", title: `In 15 min · ${fmtDayTime(d)}`, answer: "plus_15" });
+    if (c.key === "next") {
+      const keep = b.replacement && new Date(b.replacement.start).getTime() === d.getTime();
+      out.push({ action: "next", title: `Next work time · ${fmtDayTime(d)}`, answer: keep ? "keep" : "pick_time", picked_time: keep ? null : c.start });
+    }
+  }
+  out.push({ action: "pick", title: "Pick a time…" });
+  return out;
+}
 
-// "Pick a time": one-tap times from the server (soonest first, and selected), a free picker, and
-// what the choice would do before it's confirmed ("Moves to 4:45 PM. Lab shifts to 6:15 PM.").
-function pickControl(blockId, choices) {
+// The buttons row, each acting at once, plus the picker that "Pick a time…" opens.
+function startButtons(b) {
+  const row = el("div", "actions");
+  const picker = pickControl(b);
+  for (const o of startOptions(b)) {
+    if (o.action === "pick") {
+      const toggle = button(o.title, null, () => {
+        picker.hidden = !picker.hidden;
+        toggle.setAttribute("aria-expanded", String(!picker.hidden));
+        if (!picker.hidden) picker.querySelector("input").focus();
+      });
+      toggle.setAttribute("aria-expanded", "false");
+      row.append(toggle);
+      continue;
+    }
+    const btn = button(o.title, o.action === "start_now" ? "primary" : null, () => answer(b.id, o.answer, o.picked_time));
+    if (o.action === "in_15") btn.dataset.in15 = "";
+    row.append(btn);
+  }
+  return [row, picker];
+}
+
+// "Pick a time…": a time (the next work time to start with) and one button that moves the block
+// there, with what else that shifts ("Lab: Relative Velocity shifts to Sat 6:15 PM.").
+function pickControl(b) {
   const wrap = el("div", "pick");
-  const chips = el("div", "chips");
+  wrap.hidden = true;
   const input = el("input");
   input.type = "datetime-local";
   input.setAttribute("aria-label", "Start time");
-  const confirm = button("Pick this time", null, () => {
+  const move = button("Move", null, () => {
     if (!input.value) return toast("Choose a time first");
-    answer(blockId, "pick_time", new Date(input.value).toISOString());
+    answer(b.id, "pick_time", new Date(input.value).toISOString());
   });
   const effect = el("p", "effect muted small");
   effect.setAttribute("aria-live", "polite");
   let asked = 0;
-  const select = async (d, chip) => {
-    input.value = toLocalInput(d);
-    chips.querySelectorAll("button").forEach((c) => c.setAttribute("aria-pressed", String(c === chip)));
-    confirm.textContent = `Start at ${fmtDayTime(d)}`;
+  const update = async () => {
+    if (!input.value) return;
+    const d = new Date(input.value);
+    move.textContent = `Move to ${fmtDayTime(d)}`;
     const mine = ++asked;
     try {
-      const r = await post(`/api/blocks/${blockId}/preview`, { answer: "pick_time", picked_time: d.toISOString() });
+      const r = await post(`/api/blocks/${b.id}/preview`, { answer: "pick_time", picked_time: d.toISOString() });
       if (mine === asked) effect.textContent = previewText(r);
     } catch (e) {
       if (mine === asked) effect.textContent = e.message;
     }
   };
-  const list = choices?.length ? choices : [{ key: "soonest", start: new Date(Math.ceil((now().getTime() + 15 * 60_000) / 900_000) * 900_000).toISOString() }];
-  // Before work hours "In 30 min" can be sooner than the default, which then says why it's later.
-  const earliest = Math.min(...list.map((c) => new Date(c.start).getTime()));
-  list.forEach((c) => {
-    const d = new Date(c.start);
-    const when = c.key === "tomorrow" ? fmtDayTime(d) : fmtTime(d);
-    const name = c.key === "soonest" && d.getTime() > earliest ? "In work hours" : CHOICE_LABEL[c.key] || label(c.key);
-    const chip = button(`${name} · ${when}`, "chip", () => select(d, chip));
-    chips.append(chip);
-  });
-  input.addEventListener("change", () => input.value && select(new Date(input.value), null));
+  input.addEventListener("input", update);
+  const start = (b.choices || []).find((c) => c.key === "next") || b.choices?.[0];
+  input.value = toLocalInput(start ? new Date(start.start) : new Date(Math.ceil((now().getTime() + 15 * 60_000) / 900_000) * 900_000));
+  update();
   const row = el("div", "actions");
-  row.append(input, confirm);
-  wrap.append(chips, row, effect);
-  select(new Date(list[0].start), chips.firstChild);
+  row.append(input, move);
+  wrap.append(row, effect);
   return wrap;
 }
 
-// "Moves to Mon 4:45 PM. Lab: Relative Velocity shifts to Mon 6:15 PM."
+// What else a picked time moves: "Lab: Relative Velocity shifts to Sat 6:15 PM." The button
+// already says where this block goes.
 function previewText(r) {
-  const parts = [`Moves to ${fmtDayTime(new Date(r.block.start))}${r.block.at_risk ? " (ends after it's due)" : ""}.`];
-  r.moved.forEach((m) => parts.push(`${m.name} shifts to ${fmtDayTime(new Date(m.start))}${m.at_risk ? " (after it's due)" : ""}.`));
-  if (!r.moved.length) parts.push("Nothing else moves.");
+  const parts = r.moved.map((m) => `${m.name} shifts to ${fmtDayTime(new Date(m.start))}${m.at_risk ? " (after it's due)" : ""}.`);
+  if (!parts.length) parts.push("Nothing else moves.");
+  if (r.block.at_risk) parts.unshift("That ends after it's due.");
   return parts.join(" ");
 }
 
@@ -333,20 +368,12 @@ function checkinBox(b) {
   const missed = b.status === "missed";
   const box = el("div", `checkin${missed ? " missed" : ""}`);
   box.id = `checkin-${b.id}`;
-  box.append(el("h2", null, missed ? `You missed the start of ${b.name}` : `Time to start: ${b.name}`));
-  const again = missed && b.replacement ? new Date(b.replacement.start) : null;
-  let text;
-  if (!missed) text = b.first_step ? `First step: ${b.first_step}` : "Open the prep card for your first step.";
-  else if (again) {
-    text = `It was planned for ${fmtDayTime(new Date(b.start))}. No problem: I moved it to ${fmtDayTime(again)}. Keep that time or pick another.`;
-    if (b.replacement.at_risk) text += " That ends after it's due, so sooner is better.";
-  } else text = `It was planned for ${fmtDayTime(new Date(b.start))}. No problem: when will you start?`;
-  box.append(el("p", null, text));
-  const actions = el("div", "actions");
-  actions.append(button("Start now", "primary", () => answer(b.id, "start_now")));
-  if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(b.id, "keep")));
-  actions.append(button("+15 min", null, () => answer(b.id, "plus_15")));
-  box.append(actions, pickControl(b.id, b.choices));
+  if (missed) box.append(el("h2", null, `You missed ${b.name} (planned ${fmtDayTime(new Date(b.start))}). When will you start?`));
+  else {
+    box.append(el("h2", null, `Time to start: ${b.name}`));
+    box.append(el("p", null, b.first_step ? `First step: ${b.first_step}` : "Open the prep card for your first step."));
+  }
+  box.append(...startButtons(b));
   return box;
 }
 
@@ -385,16 +412,9 @@ function cardAlert(c) {
   }
   if (c.missed) {
     const box = el("div", "card-alert missed");
-    const again = c.next_block ? new Date(c.next_block) : null;
-    box.append(
-      el("strong", null, `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`),
-      el("p", null, again ? `New time: ${fmtDayTime(again)}. Keep it, or pick another time.` : "When will you start?"),
-    );
-    const actions = el("div", "actions");
-    actions.append(button("Start now", "primary", () => answer(c.missed.block_id, "start_now")));
-    if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(c.missed.block_id, "keep")));
-    const entry = state?.checkin.find((b) => b.id === c.missed.block_id);
-    box.append(actions, pickControl(c.missed.block_id, entry?.choices));
+    box.append(el("strong", null, `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}. When will you start?`));
+    const entry = state?.checkin.find((b) => b.id === c.missed.block_id) || { id: c.missed.block_id, choices: [] };
+    box.append(...startButtons(entry));
     return box;
   }
   return null;
@@ -417,10 +437,9 @@ async function answer(blockId, ans, pickedTime) {
     renderedKeys.week = "";
     if (ans === "start_now") toast(r.block.first_step ? `Go: ${r.block.first_step}` : "Go!", 6000);
     else if (ans === "plus_15") toast("OK, I'll ping you again in 15 minutes.");
-    else if (ans === "keep") toast(`Kept: ${fmtDayTime(new Date(r.block.start))}. I'll ping you then.`);
     else {
       const shifted = r.moved.length ? ` ${r.moved.length} other block${r.moved.length > 1 ? "s" : ""} moved to make room.` : "";
-      toast(`Moved to ${fmtDayTime(new Date(r.block.start))}.${shifted}`, 5000);
+      toast(`Set for ${fmtDayTime(new Date(r.block.start))}. I'll ping you then.${shifted}`, 5000);
     }
     await refresh(true);
     if (ans === "start_now") {
@@ -1180,25 +1199,19 @@ async function testNotification() {
   }
 }
 
-// The same options sw.js gives a pushed ping: Start now / +15 min / Pick a time buttons, and a
-// missed start stays on screen until answered (and buzzes a phone).
-const NOTIFY_ACTIONS = [
-  { action: "start_now", title: "Start now" },
-  { action: "plus_15", title: "+15 min" },
-  { action: "pick", title: "Pick a time" },
-];
-
+// The same options sw.js gives a pushed ping: the check-in's buttons (startOptions; a laptop shows
+// the first two), and a missed start stays on screen until answered (and buzzes a phone).
 function notifyOptions(b, renotify) {
   const missed = b.status === "missed";
-  const again = missed && b.replacement ? `New time: ${fmtDayTime(new Date(b.replacement.start))}. Tap to change it.` : "When will you start? Tap to pick a time.";
+  const actions = startOptions(b);
   return {
-    body: missed ? again : b.first_step || "Open your prep card.",
+    body: missed ? `Planned for ${fmtDayTime(new Date(b.start))}. When will you start?` : b.first_step || "Open your prep card.",
     tag: `block-${b.id}`,
-    data: { url: `/?block=${b.id}`, block_id: b.id, kind: missed ? "missed" : "ping" },
+    data: { url: `/?block=${b.id}`, block_id: b.id, kind: missed ? "missed" : "ping", actions },
     requireInteraction: missed,
     renotify,
     vibrate: missed ? [300, 100, 300, 100, 300] : [200, 100, 200],
-    actions: NOTIFY_ACTIONS,
+    actions: actions.map(({ action, title }) => ({ action, title })),
   };
 }
 

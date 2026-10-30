@@ -1,8 +1,8 @@
 """The check-in: which blocks are waiting on the student, what times to offer, and the answer
 (start now / +15 min / pick a time / keep) with the week's reflow.
 
-`waiting` decides what the check-in shows; `choices` the times "pick a time" offers, soonest
-first. `apply_answer` takes the student's answer for one block and returns the updated full block
+`waiting` decides what the check-in shows; `choices` the one-tap times it offers ("In 15 min",
+"Next work time"). `apply_answer` takes the student's answer for one block and returns the updated full block
 list plus the Ping recording the answer. Reflow: the answered block goes where the student said;
 any planned block it now overlaps (or that slid into the past) moves to the next free slot, in the
 daily window and before its due date if possible; everything else stays put. Blocks that end up
@@ -17,8 +17,8 @@ from app.models import Assignment, Block, Ping
 from app.scheduler import ACTIVE, Window, ceil_slot, default_window, find_slot, overlapping
 
 SNOOZE = timedelta(minutes=15)
-LEAD = timedelta(minutes=15)  # the soonest suggested start is at least this far out
-TONIGHT_HOUR = 19
+LEAD = timedelta(minutes=15)  # the next work time is at least this far out
+NEAR = timedelta(minutes=30)  # a next work time this close to "In 15 min" is the same choice twice
 
 
 def closed(assignments: dict[int, Assignment], blocks: list[Block], now: datetime) -> set[int]:
@@ -64,50 +64,51 @@ def replacement(blocks: list[Block], missed: Block) -> Block | None:
     return min(later, key=lambda b: b.start) if later else None
 
 
+def next_work_time(
+    blocks: list[Block],
+    block_id: int,
+    now: datetime,
+    due: datetime | None = None,
+    window: Window | None = None,
+) -> datetime:
+    """The first quarter hour at least LEAD out where the block fits in the work window, clear of
+    the other live blocks, and ends by the due date; failing that, the first such slot outside the
+    window, then after the due date."""
+    window = window or default_window()
+    target = next(b for b in blocks if b.id == block_id)
+    length = target.end - target.start
+    busy = [(b.start, b.end) for b in blocks if b.id != block_id and b.status in ACTIVE]
+    first = ceil_slot(now + LEAD)
+    return (
+        find_slot(first, length, busy, due, window)
+        or find_slot(first, length, busy, due)
+        or find_slot(first, length, busy, window=window)
+        or first
+    )
+
+
 def choices(
     blocks: list[Block],
     block_id: int,
     now: datetime,
     due: datetime | None = None,
     window: Window | None = None,
+    planned: datetime | None = None,
 ) -> list[dict]:
-    """Times to offer for "pick a time", as [{"key", "start"}], soonest first.
-
-    "soonest" is the default: the first quarter hour at least LEAD out where the block fits in the
-    work window, clear of the other live blocks, and ends by the due date (failing that, the first
-    such slot outside the window, then after the due date). Then one-tap extras, each only if it
-    ends by the due date: "in_30" and "in_60" (straight from now, the reflow makes room), "tonight"
-    (first free slot from 7 PM today) and "tomorrow" (first free slot from tomorrow's work start).
-    Duplicate times are dropped.
-    """
+    """The one-tap times a check-in offers besides Start now, as [{"key", "start"}]: "in_15" (the
+    "+15 min" answer) only when that falls inside the work window and the block still ends by the
+    due date, then "next" unless it's within NEAR of "in_15", so the two never offer the same
+    thing. "next" is `planned` when given and still ahead (where a missed start was already moved,
+    so the button agrees with what happens if the student does nothing), else `next_work_time`."""
     window = window or default_window()
     target = next(b for b in blocks if b.id == block_id)
-    length = target.end - target.start
-    busy = [(b.start, b.end) for b in blocks if b.id != block_id and b.status in ACTIVE]
-    first = ceil_slot(now + LEAD)
-    soonest = (
-        find_slot(first, length, busy, due, window)
-        or find_slot(first, length, busy, due)
-        or find_slot(first, length, busy, window=window)
-        or first
-    )
-    local = as_local(now)
-    today_eve = local.replace(hour=TONIGHT_HOUR, minute=0, second=0, microsecond=0)
-    tomorrow = (local + timedelta(days=1)).replace(hour=window[0], minute=0, second=0, microsecond=0)
-    tonight = find_slot(max(first, today_eve), length, busy, due, window)
-    next_day = find_slot(tomorrow, length, busy, due, window)
-    extras = [
-        ("in_30", ceil_slot(now + timedelta(minutes=30))),
-        ("in_60", ceil_slot(now + timedelta(minutes=60))),
-        ("tonight", tonight if tonight and as_local(tonight).date() == local.date() else None),
-        ("tomorrow", next_day if next_day and as_local(next_day).date() == tomorrow.date() else None),
-    ]
-    out, seen = [{"key": "soonest", "start": soonest}], {soonest}
-    for key, start in extras:
-        if start is None or start in seen or (due and start + length > due):
-            continue
-        out.append({"key": key, "start": start})
-        seen.add(start)
+    snooze = now + SNOOZE
+    soonest = planned if planned and planned > now else next_work_time(blocks, block_id, now, due, window)
+    out = []
+    if window[0] <= as_local(snooze).hour < window[1] and not (due and snooze + (target.end - target.start) > due):
+        out.append({"key": "in_15", "start": snooze})
+    if not out or abs(soonest - snooze) >= NEAR:
+        out.append({"key": "next", "start": soonest})
     return out
 
 

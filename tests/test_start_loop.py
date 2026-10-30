@@ -216,16 +216,32 @@ def test_answering_clears_the_notification_on_other_devices(client, monkeypatch)
     assert "is set for" in body
 
 
-# ---- "pick a time": suggestions and preview --------------------------------------------------------
+# ---- one-tap times, notification buttons and preview ---------------------------------------------------
 
 
-def test_checkin_offers_the_soonest_time_first(client):
+def test_checkin_offers_in_15_and_the_next_work_time(client):
     set_clock(client, at(2, 15, 20))  # block 1 (3 PM) is pinged; block 2 runs 4:00-5:30
     [pending] = state(client)["checkin"]
-    choices = {c["key"]: datetime.fromisoformat(c["start"]) for c in pending["choices"]}
-    assert pending["choices"][0]["key"] == "soonest"
-    assert choices["soonest"] == at(2, 17, 30)  # 3:45 would run into block 2, so right after it
-    assert choices["in_30"] == at(2, 16)
+    assert [c["key"] for c in pending["choices"]] == ["in_15", "next"]
+    assert close(pending["choices"][0]["start"], at(2, 15, 35))
+    assert datetime.fromisoformat(pending["choices"][1]["start"]) == at(2, 17, 30)  # 3:45 runs into block 2
+
+
+def test_notifications_carry_the_checkin_buttons(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(push, "send_ping", lambda conn, title, body, url="/", tag="", extra=None, skip="": sent.append((title, body, extra)))
+    set_clock(client, at(2, 15))  # block 1 (3 PM) pinged
+    _, _, extra = sent[-1]
+    titles = [a["title"] for a in extra["actions"]]
+    assert titles == ["Start now", "In 15 min · Mon 3:15 PM", "Next work time · Mon 5:30 PM", "Pick a time…"]
+    assert [a.get("answer") for a in extra["actions"]] == ["start_now", "plus_15", "pick_time", None]
+    clock(client, action="advance", minutes=20)  # missed at 3:20; a new block is planned at once
+    title, body, extra = sent[-1]
+    assert title == "Missed start: Problem Set 6: Logarithms" and body == "Planned for Mon 3:00 PM. When will you start?"
+    [pending] = [b for b in state(client)["checkin"] if b["id"] == 1]
+    nxt = next(a for a in extra["actions"] if a["action"] == "next")
+    assert nxt["title"] == f"Next work time · {loop.when(datetime.fromisoformat(pending['replacement']['start']))}"
+    assert nxt["answer"] == "keep"  # it's already there, so the button keeps it rather than moving it
 
 
 def test_preview_says_what_moves_without_saving(client):

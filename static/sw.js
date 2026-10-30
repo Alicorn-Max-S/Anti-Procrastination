@@ -1,8 +1,7 @@
-// Service worker: shows start-time pushes with Start now / +15 min / Pick a time buttons, answers
-// from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
+// Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v3";
+const CACHE = "start-helper-v4";
 const SHELL = ["/", "/static/app.js", "/static/style.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
 const ICON = "/static/icons/icon-192.png";
 
@@ -37,15 +36,17 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-// Chrome on a laptop shows the first two; Android shows all three.
+// The buttons when a push doesn't list its own (an older server). Each is {action, title} plus the
+// check-in `answer` (and `picked_time`) it posts; one without an answer opens the check-in.
 const ACTIONS = [
-  { action: "start_now", title: "Start now" },
-  { action: "plus_15", title: "+15 min" },
-  { action: "pick", title: "Pick a time" },
+  { action: "start_now", title: "Start now", answer: "start_now" },
+  { action: "in_15", title: "In 15 min", answer: "plus_15" },
+  { action: "pick", title: "Pick a time…" },
 ];
 
-// A ping or a missed start (the server sends `kind`, `block_id` and `renotify`) gets the buttons
-// and a buzz; a missed start stays on screen until answered, and a reminder alerts again under
+// A ping or a missed start (the server sends `kind`, `block_id`, `renotify` and `actions`, the
+// same buttons as the check-in on the page) gets the buttons and a buzz; Chrome on a laptop shows
+// the first two. A missed start stays on screen until answered, and a reminder alerts again under
 // the same tag. app.js's notifyOptions matches this for the notifications the page shows.
 function options(data) {
   const opts = { body: data.body, tag: data.tag || undefined, icon: ICON, badge: ICON, data };
@@ -53,7 +54,7 @@ function options(data) {
   const missed = data.kind === "missed";
   return {
     ...opts,
-    actions: ACTIONS,
+    actions: (data.actions || ACTIONS).map(({ action, title }) => ({ action, title })),
     requireInteraction: missed,
     renotify: Boolean(data.renotify && data.tag),
     vibrate: missed ? [300, 100, 300, 100, 300] : [200, 100, 200],
@@ -87,14 +88,14 @@ async function tellPages(message) {
 }
 
 // A tap focuses the open page and tells it which block (no reload); otherwise opens /?block=ID.
-// Start now and +15 min answer without opening anything (Start now then opens the card).
+// A button with an answer answers without opening anything (Start now then opens the card).
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
   const url = data.url || "/";
   const blockId = data.block_id || new URL(url, location.origin).searchParams.get("block");
-  const answer = ["start_now", "plus_15"].includes(event.action) ? event.action : null;
-  event.waitUntil(answer && blockId ? answerFromNotification(blockId, answer, url) : openPage(url, blockId));
+  const chosen = event.action ? (data.actions || ACTIONS).find((a) => a.action === event.action) : null;
+  event.waitUntil(chosen?.answer && blockId ? answerFromNotification(blockId, chosen, url) : openPage(url, blockId));
 });
 
 async function openPage(url, blockId) {
@@ -108,18 +109,18 @@ async function openPage(url, blockId) {
 // Posts the check-in like the page does. The subscription's endpoint tells the server which
 // device answered, so the "answered" push goes only to the others. If it can't be sent, the page
 // opens on the check-in instead.
-async function answerFromNotification(blockId, answer, url) {
+async function answerFromNotification(blockId, chosen, url) {
   try {
     const sub = await self.registration.pushManager.getSubscription();
     const res = await fetch(`/api/blocks/${blockId}/checkin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer, endpoint: sub?.endpoint || "" }),
+      body: JSON.stringify({ answer: chosen.answer, picked_time: chosen.picked_time || null, endpoint: sub?.endpoint || "" }),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } catch {
     return openPage(url, blockId);
   }
   await tellPages({ type: "answered" });
-  if (answer === "start_now") await openPage(url, blockId);
+  if (chosen.answer === "start_now") await openPage(url, blockId);
 }

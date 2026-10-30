@@ -91,16 +91,40 @@ def waiting_misses(conn: sqlite3.Connection, now: datetime) -> list[Block]:
     return [b for b in checkin.waiting(blocks, db.list_pings(conn), closed) if b.status == "missed"]
 
 
-def _notify_miss(conn: sqlite3.Connection, b: Block, again: Block | None, renotify: bool) -> None:
+def buttons(conn: sqlite3.Connection, asked: Block, target: Block, now: datetime) -> list[dict]:
+    """A notification's buttons, the same as the check-in's on the page (app.js startOptions):
+    Start now, "In 15 min" and/or "Next work time" with day and time, Pick a time…. Each carries
+    the check-in `answer` (and `picked_time`) sw.js posts; Pick a time opens the check-in. `target`
+    is the block an answer moves (a miss's new block); when that already sits at the next work
+    time, the button keeps it there."""
+    a = db.get_assignment(conn, asked.assignment_id)
+    out = [{"action": "start_now", "title": "Start now", "answer": "start_now"}]
+    planned = target.start if target.id != asked.id else None
+    for c in checkin.choices(db.list_blocks(conn), target.id, now, a.due_at if a else None, planned=planned):
+        if c["key"] == "in_15":
+            out.append({"action": "in_15", "title": f"In 15 min · {when(c['start'])}", "answer": "plus_15"})
+        else:
+            keep = target.id != asked.id and c["start"] == target.start
+            out.append(
+                {
+                    "action": "next",
+                    "title": f"Next work time · {when(c['start'])}",
+                    "answer": "keep" if keep else "pick_time",
+                    "picked_time": None if keep else c["start"].isoformat(),
+                }
+            )
+    out.append({"action": "pick", "title": "Pick a time…"})
+    return out
+
+
+def _notify_miss(conn: sqlite3.Connection, b: Block, again: Block | None, renotify: bool, now: datetime) -> None:
     push.send_ping(
         conn,
         f"Missed start: {_name(conn, b.assignment_id)}",
-        f"No problem. New time: {when(again.start)}. Tap to change it."
-        if again
-        else "No problem. When will you start? Tap to pick a time.",
+        f"Planned for {when(b.start)}. When will you start?",
         f"/?block={b.id}",
         tag=f"block-{b.id}",
-        extra={"kind": "missed", "block_id": b.id, "renotify": renotify},
+        extra={"kind": "missed", "block_id": b.id, "renotify": renotify, "actions": buttons(conn, b, again or b, now)},
     )
 
 
@@ -118,7 +142,7 @@ def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
     new = replan(conn, now) if missed else []
     events["new"] = [b.id for b in new]
     for b in missed:
-        _notify_miss(conn, b, next((n for n in new if n.assignment_id == b.assignment_id), None), renotify=False)
+        _notify_miss(conn, b, next((n for n in new if n.assignment_id == b.assignment_id), None), False, now)
     while (b := scheduler.due_ping(db.list_blocks(conn), now)) is not None:
         b = b.model_copy(update={"status": "pinged"})
         db.save_block(conn, b)
@@ -130,7 +154,7 @@ def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
             card.first_step if card else "Open your prep card.",
             f"/?block={b.id}",
             tag=f"block-{b.id}",
-            extra={"kind": "ping", "block_id": b.id},
+            extra={"kind": "ping", "block_id": b.id, "actions": buttons(conn, b, b, now)},
         )
         events["pinged"].append(b.id)
     blocks = db.list_blocks(conn)
@@ -138,7 +162,7 @@ def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
         sent = nag(conn, b.id)
         if sent and sent[0] <= NAG_MAX and now - sent[1] >= NAG_EVERY:
             _set_nag(conn, b.id, sent[0] + 1, now)
-            _notify_miss(conn, b, checkin.replacement(blocks, b), renotify=True)
+            _notify_miss(conn, b, checkin.replacement(blocks, b), True, now)
             events["nagged"].append(b.id)
     return events
 

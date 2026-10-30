@@ -170,9 +170,10 @@ def _checkin_view(conn, ctx: "Context", blocks: list[Block], b: Block, now: date
         view["notified"] = sent[0] if sent else 1
         target = r or b
     a = ctx.assignments.get(b.assignment_id)
+    planned = target.start if target.id != b.id else None  # a miss's new block
     view["choices"] = [
         {"key": c["key"], "start": c["start"].isoformat()}
-        for c in checkin.choices(blocks, target.id, now, a.due_at if a else None)
+        for c in checkin.choices(blocks, target.id, now, a.due_at if a else None, planned=planned)
     ]
     return view
 
