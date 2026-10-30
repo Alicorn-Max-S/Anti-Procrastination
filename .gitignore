@@ -1,0 +1,21 @@
+# Secrets and real school data: this repo is public, never commit these
+.env
+*.db
+*.sqlite3
+data/
+uploads/
+photos/
+fixtures/real/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

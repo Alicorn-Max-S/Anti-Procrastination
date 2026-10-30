@@ -1,0 +1,20 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "demo",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": [
+        "-c",
+        "import os; os.environ.update(DB_PATH='data/preview.db', META_API_KEY='', CANVAS_TOKEN='', VAPID_PRIVATE_KEY=''); import uvicorn; uvicorn.run('app.main:app', port=8765)"
+      ],
+      "port": 8765
+    }
+  ]
+}

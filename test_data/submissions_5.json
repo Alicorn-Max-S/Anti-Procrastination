@@ -1,0 +1,23 @@
+[
+ {
+  "id": 66,
+  "assignment_id": 66,
+  "user_id": 1,
+  "attempt": null,
+  "excused": null,
+  "graded_at": null,
+  "late": false,
+  "missing": false,
+  "points_deducted": null,
+  "posted_at": null,
+  "seconds_late": 0,
+  "submission_type": null,
+  "submitted_at": null,
+  "workflow_state": "unsubmitted",
+  "cached_due_date": "2027-06-04T06:59:59Z",
+  "late_policy_status": null,
+  "redo_request": false,
+  "extra_attempts": null,
+  "submission_comments": []
+ }
+]

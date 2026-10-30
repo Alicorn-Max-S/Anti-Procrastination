@@ -1,0 +1,26 @@
+[project]
+name = "start-helper"
+version = "0.1.0"
+description = "Turns Canvas assignments into prep cards with the first step decided, pings you at start time, and re-plans when you miss it."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "python-dotenv>=1.0",
+    "python-multipart>=0.0.9",  # graded-test photo uploads
+    "pywebpush>=2.0",           # phone push (no-op until VAPID keys are set)
+    "tzdata",                   # IANA timezones on Windows
+    "tzlocal>=5.0",             # this machine's zone, with DST rules, when TIMEZONE is blank
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]
+
+[tool.setuptools]
+packages = ["app"]

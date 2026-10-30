@@ -1,0 +1,98 @@
+<!doctype html>
+<!-- The single page: check-in banner, prep cards, the week of blocks, and the dashboard. Plain HTML/JS, no build. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#1c1c1c" />
+    <title>Start Helper</title>
+    <link rel="manifest" href="/static/manifest.webmanifest" />
+    <link rel="icon" href="/static/icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <img src="/static/icons/icon-192.png" alt="" width="28" height="28" />
+        <span>Start Helper</span>
+      </div>
+      <div class="top-actions">
+        <span id="sync-status" class="muted small"></span>
+        <button id="sync-btn" class="ghost" type="button">Sync</button>
+        <button id="notify-btn" class="ghost" type="button">Turn on notifications</button>
+      </div>
+    </header>
+
+    <section class="clockbar" aria-label="Demo clock">
+      <div class="clock-now">
+        <span id="clock-time">--</span>
+        <span id="clock-badge" class="badge sim" hidden>Simulated</span>
+      </div>
+      <div class="clock-controls">
+        <input id="clock-input" type="datetime-local" aria-label="Set the clock to" />
+        <button type="button" data-clock="set">Set</button>
+        <button type="button" data-clock="15">+15m</button>
+        <button type="button" data-clock="60">+1h</button>
+        <button type="button" data-clock="1440">+1d</button>
+        <button type="button" data-clock="reset" class="ghost">Real time</button>
+      </div>
+    </section>
+
+    <section id="checkin" class="checkin-list" aria-live="polite"></section>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="cards" aria-selected="true">Cards</button>
+      <button role="tab" data-tab="week" aria-selected="false">Week</button>
+      <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
+    </nav>
+
+    <main>
+      <section id="tab-cards" class="tab-panel">
+        <div id="cards" class="cards"><p class="empty">Loading…</p></div>
+      </section>
+
+      <section id="tab-week" class="tab-panel" hidden>
+        <div id="week" class="week"></div>
+        <p class="muted small">Blocks sit between your work hours. When you miss one or pick a new time, the rest of the week moves to make room.</p>
+      </section>
+
+      <section id="tab-dashboard" class="tab-panel" hidden>
+        <div class="panel">
+          <div class="row">
+            <label for="course-select">Course</label>
+            <select id="course-select"></select>
+          </div>
+          <h3>Where you lose marks</h3>
+          <p class="muted small">Share of marks lost on graded tests, by topic and question type. Darker is weaker.</p>
+          <div id="grid" class="grid-wrap"></div>
+          <div id="weakest"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Add a graded test</h3>
+          <p class="muted small">A photo of a marked quiz or test. Each question becomes a row below. Cover other students' names first.</p>
+          <form id="upload-form" class="row wrap">
+            <input id="upload-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" required />
+            <button type="submit" class="primary">Read it</button>
+            <span id="upload-status" class="muted small"></span>
+          </form>
+          <div id="rows" class="table-wrap"></div>
+        </div>
+
+        <div class="panel">
+          <h3>What your teachers keep saying</h3>
+          <ul id="evidence" class="evidence"></ul>
+        </div>
+
+        <div class="panel">
+          <h3>Starting stats</h3>
+          <div id="stats" class="stats"></div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
