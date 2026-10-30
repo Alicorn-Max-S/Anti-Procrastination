@@ -291,6 +291,7 @@ def text_pages(path: Path) -> tuple[list[str], str]:
 # ---- scans: text read once by the model -------------------------------------------------------
 
 SCAN_MAX_PAGES = 12  # pages of one scan sent to be transcribed; the rest stay without text
+SCAN_RETRY_SECONDS = 30 * 60  # after a failed transcription, wait this long before paying again
 FROM_SCAN = "read from a scan by the model"
 SCAN_INSTRUCTIONS = (
     "You transcribe scanned school documents (worksheets, answer keys, readings, tests) into plain "
@@ -392,16 +393,22 @@ def transcribe(doc: Doc) -> Doc:
         lock = _scan_locks.setdefault(sha, threading.Lock())
     with lock:  # cards build on several threads: a scan two of them use is still sent once
         cache = _scan_cache(sha)
+        failed = cache.with_suffix(".failed")
         try:
             pages = [_ScanPage(**p) for p in json.loads(cache.read_text(encoding="utf-8"))["pages"]]
         except (OSError, ValueError, KeyError, TypeError):
+            if failed.exists() and time.time() - failed.stat().st_mtime < SCAN_RETRY_SECONDS:
+                return doc  # failed a moment ago: don't pay for the same failure on every rebuild
             try:
                 pages = _transcribe(path, doc.pdf_pages, sha)
             except Exception as e:  # best effort: a card never fails because a scan couldn't be read
                 log.warning("couldn't transcribe the scan %s: %s", path.name, e)
+                failed.parent.mkdir(parents=True, exist_ok=True)
+                failed.write_text(f"{path.name}: {e}"[:500], encoding="utf-8")
                 return doc
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({"file": path.name, "pages": [p.model_dump() for p in pages]}), encoding="utf-8")
+            failed.unlink(missing_ok=True)
             log.info("transcribed the scan %s: %d pages", path.name, len(pages))
     return _with_scan_text(doc, pages)
 

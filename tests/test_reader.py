@@ -1,6 +1,8 @@
 """Document reader: spreads split into book pages, the text cache, and what an assignment's links
 turn into (Google files public / school-only / sniffed, articles, paywalls, videos)."""
 
+import os
+
 import httpx
 import pytest
 
@@ -266,7 +268,11 @@ def test_scans_stay_untouched_without_the_model_or_when_it_fails(tmp_path, model
     monkeypatch.setattr(meta_client, "generate_structured", lambda *a, **k: (_ for _ in ()).throw(meta_client.MetaError("429")))
     assert reader.text_pages(path)[0] == []
     monkeypatch.setattr(meta_client, "generate_structured", real)
-    assert reader.text_pages(path)[0] and model == [2]  # the failure wasn't cached
+    assert reader.text_pages(path)[0] == [] and model == []  # failed just now: not retried on every rebuild
+    [failed] = (tmp_path / "files" / "scans").glob("*.failed")
+    old = failed.stat().st_mtime - reader.SCAN_RETRY_SECONDS - 1
+    os.utime(failed, (old, old))
+    assert reader.text_pages(path)[0] and model == [2] and not failed.exists()  # tried again later
 
 
 def test_attachments_transcribe_the_scans_they_send(tmp_path, model, monkeypatch):
