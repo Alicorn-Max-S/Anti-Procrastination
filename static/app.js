@@ -582,7 +582,9 @@ function renderSources(sources) {
     const openDoc = why && /^https:\/\/(docs|drive)\.google\.com\//i.test(s.url || "");
     const web = s.url && /^https?:\/\//i.test(s.url) && !openDoc;
     span.append(web ? link(s.name, s.url) : el("span", null, s.name));
-    const extra = why ? s.reason : s.pages ? `${s.pages} page${s.pages === 1 ? "" : "s"}` : "";
+    // A read file's reason is a note on how it was read, e.g. "read from the page view: downloading is turned off".
+    const pages = !why && s.pages ? `${s.pages} page${s.pages === 1 ? "" : "s"}` : "";
+    const extra = [pages, s.reason].filter(Boolean).join(", ");
     if (extra) span.append(document.createTextNode(` (${extra})`));
     if (openDoc) span.append(document.createTextNode(" "), link("Open this doc", s.url, "open-doc"));
     return span;
