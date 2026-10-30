@@ -81,6 +81,8 @@ The point is to make starting effortless, not to do the work.
   to find feedback. If nothing fits, you may instead quote a warning the teacher wrote in these
   instructions. Otherwise "". Quote exactly; never invent or reword anything inside quotes.
 - effort: light (under 45 minutes), medium, or heavy (over 2 hours or more than one sitting).
+- Answer keys (listed in the prompt) are only for checking finished work. A step may say to check
+  against the key by name; never put its answers, values or worked steps anywhere on the card.
 Never write any part of the answer or solve problems for the student."""
 
 
@@ -190,6 +192,17 @@ def _due_text(assignment: Assignment) -> str:
     return as_local(assignment.due_at).strftime("%A %b %d, %I:%M %p")
 
 
+# "KEY: Unit Vectors Practice", "Test Review KEY", "Key - Lab 3", "Answer Key", "Answers to the
+# worksheet". "Key" inside a title isn't enough ("Key Concepts"), nor is "solutions" (chemistry).
+_KEY_WORD = re.compile(r"\bKEY\b|(?i:^\s*key\s*[:\-–])")
+_ANSWER_KEY = re.compile(r"\banswer\s+(?:key|sheet)s?\b|\banswers\s+(?:to|for)\b|\bsolutions?\s+(?:key|manual|to|for)\b", re.I)
+
+
+def is_answer_key(name: str) -> bool:
+    """Whether a file's name says it's an answer key (the card may point at it, never copy from it)."""
+    return bool(_KEY_WORD.search(name) or _ANSWER_KEY.search(name))
+
+
 def _prompt(
     assignment: Assignment,
     course_name: str,
@@ -222,6 +235,8 @@ def _prompt(
         if plan
         else "Reading plan: (none)"
     )
+    read_names = read_names or [f.name for f in files]
+    keys = [n for n in read_names if is_answer_key(n)]
     return f"""Course: {course_name}
 Assignment: {assignment.name}
 Kind guessed from the title only (often wrong): {assignment.kind}
@@ -235,7 +250,8 @@ Rubric criteria:
 Links you may use:
 {link_lines}
 
-Attached files (you can read these, in this order): {"; ".join(read_names or [f.name for f in files]) or "(none)"}
+Attached files (you can read these, in this order): {"; ".join(read_names) or "(none)"}
+Answer keys among them (for checking finished work only; copy nothing from them): {"; ".join(keys) or "(none)"}
 Linked files you can't read:
 {blocked}
 Instructions available: {seen}

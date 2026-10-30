@@ -243,6 +243,7 @@ a.button.primary { background: var(--accent); border-color: var(--accent); color
 .sources { color: var(--muted); margin-top: 0.5rem; }
 .sources p { margin: 0.15rem 0; overflow-wrap: anywhere; }
 .sources a { color: inherit; }
+.sources a.open-doc { display: inline-block; margin-left: 0.15rem; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); text-decoration: none; font-weight: 600; white-space: nowrap; }
 .card-foot select.notes-medium { font: inherit; font-size: 0.85rem; padding: 0.15rem 0.3rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .card details { margin: 0.5rem 0; }
 .card summary { cursor: pointer; font-weight: 600; }

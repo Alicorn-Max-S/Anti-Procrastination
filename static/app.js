@@ -569,17 +569,22 @@ function renderSources(sources) {
   const box = el("div", "sources small");
   const read = sources.filter((s) => s.read);
   const unread = sources.filter((s) => !s.read);
+  const link = (text, url, cls = null) => {
+    const a = el("a", cls, text);
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    return a;
+  };
   const item = (s, why) => {
     const span = el("span", "source");
-    const name = s.url && /^https?:\/\//i.test(s.url) ? el("a", null, s.name) : el("span", null, s.name);
-    if (name.tagName === "A") {
-      name.href = s.url;
-      name.target = "_blank";
-      name.rel = "noopener";
-    }
-    span.append(name);
+    // A Google file the server couldn't fetch: opening it in Chrome lets the extension save it for the next sync.
+    const openDoc = why && /^https:\/\/(docs|drive)\.google\.com\//i.test(s.url || "");
+    const web = s.url && /^https?:\/\//i.test(s.url) && !openDoc;
+    span.append(web ? link(s.name, s.url) : el("span", null, s.name));
     const extra = why ? s.reason : s.pages ? `${s.pages} page${s.pages === 1 ? "" : "s"}` : "";
     if (extra) span.append(document.createTextNode(` (${extra})`));
+    if (openDoc) span.append(document.createTextNode(" "), link("Open this doc", s.url, "open-doc"));
     return span;
   };
   const line = (label, list, why) => {

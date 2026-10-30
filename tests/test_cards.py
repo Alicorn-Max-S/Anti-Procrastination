@@ -221,6 +221,29 @@ def test_prompt_names_files_by_title(conn):
     assert "Relative Velocity Inquiry Lab" in p and at(1, 1)  # at() keeps the conftest import honest
 
 
+@pytest.mark.parametrize(
+    "name, key",
+    [
+        ("KEY: Vectors and Relative Velocity HW", True),
+        ("Test Review: Vectors KEY", True),
+        ("Key - Lab 3", True),
+        ("Unit 4 Answer Key", True),
+        ("Answers to the worksheet", True),
+        ("Key Concepts in Ecology", False),
+        ("Solutions and Mixtures Lab", False),
+        ("AP Calc Exam Derivative Problems", False),
+    ],
+)
+def test_answer_keys_are_told_apart(name, key):
+    assert prep.is_answer_key(name) is key
+
+
+def test_prompt_marks_answer_keys(conn):
+    a = Assignment(id=61, course_id=1, name="Derivative Problems", kind="problem_set", description_html="<p>x</p>")
+    p = prep._prompt(a, "Calc", "x", [], [], read_names=["Derivative Problems", "KEY is provided here"])
+    assert "Answer keys among them (for checking finished work only; copy nothing from them): KEY is provided here" in p
+
+
 # ---- undo "Mark done" --------------------------------------------------------------------------
 
 
