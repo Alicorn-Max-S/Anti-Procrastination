@@ -9,14 +9,14 @@
 <body class="options">
   <main>
     <h1>Start Helper files</h1>
-    <p>This extension downloads the school Google Docs, Slides and Drive files your Canvas assignments link to, using the Google account you're already signed in to in this Chrome, and sends them to your Start Helper server. It never reads or stores your Google cookies.</p>
+    <p>This extension downloads the school Google Docs, Slides and Drive files your Canvas assignments link to, using the school account this Chrome is already signed in to, and sends them to your Start Helper server. It never reads or stores your Google cookies.</p>
 
     <label for="server">Start Helper server</label>
     <input id="server" placeholder="http://localhost:8000" spellcheck="false">
     <p class="hint">The address you open Start Helper at, e.g. <code>http://localhost:8000</code> or a Cloudflare tunnel URL.</p>
 
     <label for="key">Key</label>
-    <input id="key" spellcheck="false" autocomplete="off">
+    <input id="key" type="password" spellcheck="false" autocomplete="off">
     <p class="hint">Run <code>python -m app.browser_files key</code> in the Start Helper folder and paste what it prints.</p>
 
     <label for="email">School Google account (optional)</label>

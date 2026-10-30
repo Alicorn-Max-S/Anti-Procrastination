@@ -48,13 +48,13 @@ Without a sign-in, `…/export` redirects to Google's login page ([a scraper's n
 
 **Which account.** With several Google accounts signed in, Google uses the default one (`/u/0`), and exports can fail with 403 ([U-M IT](https://teamdynamix.umich.edu/TDClient/30/Portal/KB/PrintArticle?ID=15355)). The options page takes an optional school email, and the extension adds `authuser=<email>` to export URLs. **Unverified**: Google honours `authuser` widely, but not documented for export URLs. If it fails, the extension retries without it, and the README says to sign out of other accounts or use a separate profile.
 
-**Telling failures apart.** HTML where a file should be, or a final URL on `accounts.google.com`, means not signed in or wrong account. For a 401/403/404, the extension loads the doc's normal view page once to separate "can view, but downloading is off" (`restricted`) from "no access" (`no_access`). Opening the view page is exactly what the "Open this doc" button would do.
+**Telling failures apart.** Without a sign-in, Google answers a school-only file with a 302 to `accounts.google.com/ServiceLogin` (checked with curl on Max's two AP Calc Drive files). The extension has no access to `accounts.google.com`, and shouldn't, so `fetch()` can't follow that redirect: it throws `TypeError: Failed to fetch`, exactly like a dropped network. The extension tells them apart by repeating the request with `redirect: "manual"`. An `opaqueredirect` response means "sent to sign-in"; another throw means the network really is down. HTML where a file should be also means not signed in or wrong account. For a 401/403/404, the extension loads the doc's normal view page once to separate "can view, but downloading is off" (`restricted`) from "no access" (`no_access`). Opening the view page is exactly what the "Open this doc" button would do.
 
 ## 3. Files with download/print/copy turned off
 
 The owner can turn off download, print and copy for viewers and commenters. One switch covers all three, and it removes the download entry points in Drive, Docs, Sheets and Slides ([Google, 2015](https://workspaceupdates.googleblog.com/2015/07/disable-downloading-printing-and.html)). Teachers' files are usually shared with download on, which is the default.
 
-The known ways around it are the Docs `/mobilebasic` HTML view and scraping the rendered page ([example tutorial](https://dev.to/remoteseoconsultant/how-to-copy-a-view-only-google-doc-2593)). Both defeat a setting the teacher chose on purpose. **Not built.** The card says "Open this doc" with the reason "the teacher turned off downloading", and Max reads it himself. This is flagged to the manager, so Max can decide otherwise if he really wants to.
+The known ways around it are the Docs `/mobilebasic` HTML view and scraping the rendered page ([example tutorial](https://dev.to/remoteseoconsultant/how-to-copy-a-view-only-google-doc-2593)). Both defeat a setting the teacher chose on purpose. **Not built.** The extension uses only the normal export and download URLs, so it relies on Google enforcing the setting there. If Google refuses, the file is reported as `restricted`. The in-page fallback (section 1) uses the same export URL, so it can't get around the setting either. The card says "Open this doc" with the reason "the teacher turned off downloading", and Max reads it himself. This is flagged to the manager, so Max can decide otherwise if he really wants to.
 
 ## 4. Google Assignments
 
@@ -98,7 +98,18 @@ It captures the copy once, when it's first seen, so the card gets the template i
 - The server lists only Google links found in Canvas assignment descriptions for upcoming work, plus Google Assignments copies matched as above.
 - Uploads are checked server-side: 25 MB max, real file signature (PDF, Office ZIP, image). An HTML sign-in page is rejected even if the extension mislabels it.
 
-## 8. Design summary
+## 8. Checked in a real Chrome (Oct 30)
+
+Branded Chrome no longer honours `--load-extension` (silently ignored in 156, even with `--disable-features=DisableLoadExtensionCommandLineSwitch`). So the check loaded the extension through DevTools' `Extensions.loadUnpacked` (puppeteer-core `browser.installExtension`, over `--remote-debugging-pipe`), in a throwaway headless Chrome 156 profile with no Google sign-in. The server was a copy of Max's DB on :8005.
+
+- It loads as MV3, and the service worker starts.
+- The options page's "Save and test" reached `http://localhost:8005` from the service worker. Local Network Access didn't get in the way of an extension with host permission for localhost.
+- Opening a public Google Doc linked from a test assignment ran the whole chain: content script, then `/api/ext/opened`, then the export fetch in the service worker, then the upload. The tab's badge showed ✓, and the server stored a real PDF.
+- The polling run saved 4 PDFs: the Docs links in Max's upcoming work are actually exportable without sign-in. The 2 Drive files hit the sign-in redirect and were reported as `signin`, which is the right answer for an unsigned profile.
+
+What only Max's signed-in run can show: the cookies on service-worker requests, `authuser=<email>`, and the `restricted`/`no_access` split. Those are the checklist in the final report.
+
+## 9. Design summary
 
 ```
 Canvas (token) ──> server: assignment descriptions ──> Google links it can't open

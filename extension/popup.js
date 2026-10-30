@@ -42,7 +42,7 @@ async function render() {
     if (failed.length) {
       const ul = el("ul");
       failed.forEach((f) => ul.append(el("li", `${f.name}: ${REASONS[f.reason] || f.detail || f.reason}`, "warn")));
-      box.append(ul, el("p", "Those show \"Open this doc\" on their card.", "hint"));
+      box.append(ul, el("p", "Open those from their cards; if downloading is allowed, opening one saves it.", "hint"));
     }
   } else {
     box.append(el("p", "Hasn't run yet."));

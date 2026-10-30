@@ -39,6 +39,7 @@ button {
   background: var(--accent);
   color: #fff;
   cursor: pointer;
+  white-space: nowrap;
 }
 button.quiet { background: transparent; color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
