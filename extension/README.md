@@ -5,7 +5,7 @@ Most assignments link to Google Docs, Slides and Drive files shared only inside 
 - It only fetches Google files that your upcoming Canvas assignments link to (the server gives it the list), plus your own Google Assignments copy.
 - It only sends files to the Start Helper server you set, with your key.
 - It never reads, copies or stores your Google cookies. Chrome adds your sign-in to Google requests by itself.
-- It won't get around a teacher's "no download" setting. Those files say "the teacher turned off downloading" on the card, and you open them yourself.
+- When a teacher turned off downloading on a Doc, Slides or Sheet, it reads the doc's page view instead and sends that text. The card's source says it was read from the page view. Drive files (PDFs, Word files) with downloading off can't be read that way: the card says "the teacher turned off downloading", and you open them yourself.
 
 `RESEARCH.md` explains why it works this way, with sources.
 
@@ -38,7 +38,7 @@ Use the Chrome profile where you're signed in to your school Google account.
 - **Nothing to do day to day.** Every 10 minutes it asks the server what's missing and fetches it. **Fetch now** in the popup does it immediately.
 - **Cards update by themselves.** A file that arrives marks its card for one rebuild on the next sync (within `SYNC_MINUTES`, 5 by default). Fetching the same file again never triggers another rebuild.
 - **The popup** (toolbar icon) shows the last run: what it saved, and why anything failed.
-- **Files it can't fetch** show under "Couldn't open" on the card, with the reason. Open the doc from there. If downloading is allowed, the extension saves it as soon as the doc opens: the toolbar icon shows ✓ on that tab, or ! with the reason in its tooltip.
+- **Files it can't fetch** show under "Couldn't open" on the card, with the reason. Open the doc from there. The extension saves it as soon as the doc opens: the toolbar icon shows ✓ on that tab, or ! with the reason in its tooltip.
 - **Google Assignments.** Your copy of the doc only exists once you open the assignment from Canvas, so the server can't ask for it. Open the assignment on Canvas, then open your file from it. The extension sees the doc came from that Canvas assignment and saves your copy once (✓ on the tab). It never re-saves your later work. If it didn't catch it: with the doc open, click the toolbar icon → pick the assignment under **Is this doc your copy…** → **This is my copy**. The popup lists the assignments still waiting for a copy.
 - **Using a tunnel** (`https://….trycloudflare.com`): put that URL in settings and click **Save and test**. Chrome asks to allow that one site.
 
@@ -48,7 +48,7 @@ Use the Chrome profile where you're signed in to your school Google account.
 | --- | --- |
 | "Chrome isn't signed in to your school Google account" | Sign in to your school account in this Chrome profile. With several accounts, add your school email in settings. |
 | "your school Google account can't open it" | The teacher shared it with someone else. Ask them, or open it from Canvas. |
-| "the teacher turned off downloading" | Open the doc and read it there. Start Helper won't get around that setting. |
+| "the teacher turned off downloading" | A Drive file, or a doc whose page view had no text. Open it and read it there. |
 | "Couldn't reach http://localhost:…" | Start Helper isn't running, or the port in settings is wrong. |
 | "The server says the key is wrong" | Run `python -m app.browser_files key` again in the folder the server runs from, and paste that. |
 | You changed files in `extension/` | Click the reload arrow on the extension's card in `chrome://extensions`. |

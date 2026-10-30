@@ -623,12 +623,15 @@ def extension_upload(
     url: str = Form(...),
     title: str = Form(""),
     assignment_id: int | None = Form(None),
+    via: str = Form("download"),  # "page": the doc's page view, because downloading was turned off
     file: UploadFile = File(...),
     conn=Depends(extension_conn),
 ) -> dict:
     data = file.file.read(browser_files.MAX_BYTES + 1)
     try:
-        return browser_files.save_upload(conn, url, data, file.filename or "", title, assignment_id, clock.now())
+        return browser_files.save_upload(
+            conn, url, data, file.filename or "", title, assignment_id, clock.now(), via=via
+        )
     except browser_files.UploadError as e:
         raise HTTPException(422, str(e))
 

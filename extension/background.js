@@ -120,8 +120,26 @@ async function probe(viewUrl, email) {
   }
 }
 
-// item: {fetch_url, view_url} from the server. Tries the school account first when its email is
-// set, then the browser's default account.
+// Downloading is turned off but the doc opens: read its page view instead (Max's call: that
+// setting is usually a teacher's mistake). Docs' /mobilebasic, Slides' /htmlpresent and Sheets'
+// /htmlview/sheet have the text in the HTML. The page goes to the server as-is; the server pulls the
+// text out and records that it came from the page view. Drive files have no such view.
+async function fetchPageView(item, email) {
+  if (!item.page_url || !isFetchable(item.page_url)) return null;
+  try {
+    const r = await fetch(withAuthUser(item.page_url, email), { credentials: "include", cache: "no-store" });
+    const type = r.headers.get("content-type") || "";
+    if (!r.ok || new URL(r.url).hostname !== "docs.google.com" || !type.startsWith("text/html")) return null;
+    const html = await r.text();
+    if (html.length > MAX_BYTES) return null;
+    return { ok: true, via: "page", blob: new Blob([html], { type: "text/html" }), filename: "page-view.html" };
+  } catch {
+    return null;
+  }
+}
+
+// item: {fetch_url, view_url, page_url} from the server. Tries the school account first when its
+// email is set, then the browser's default account.
 async function fetchGoogle(item, email) {
   if (!isFetchable(item.fetch_url)) return { ok: false, reason: "error", detail: "not a Google download URL" };
   const urls = email ? [withAuthUser(item.fetch_url, email), item.fetch_url] : [item.fetch_url];
@@ -133,6 +151,9 @@ async function fetchGoogle(item, email) {
   if (got.reason === "denied" || got.reason === "page") {
     got = { ok: false, reason: await probe(item.view_url, email), detail: got.detail };
   }
+  if (got.reason === "restricted") {
+    got = (await fetchPageView(item, email)) || got;
+  }
   return got;
 }
 
@@ -141,8 +162,16 @@ async function upload(url, got, title, assignmentId) {
   form.append("url", url);
   form.append("title", title || "");
   if (assignmentId != null) form.append("assignment_id", String(assignmentId));
+  if (got.via) form.append("via", got.via);
   form.append("file", got.blob, got.filename || "download");
   return api("/api/ext/files", { form });
+}
+
+// A page view the server couldn't find text in counts as "downloading turned off".
+function uploadFailure(got, e) {
+  return got.via === "page"
+    ? { ok: false, reason: "restricted", detail: `page view: ${e.message || e}` }
+    : { ok: false, reason: "error", detail: String(e.message || e) };
 }
 
 async function reportFailure(url, got) {
@@ -175,15 +204,14 @@ async function doRun(trigger) {
   const saved = [];
   const failed = [];
   for (const item of needed.files.slice(0, PER_RUN)) {
-    const got = await fetchGoogle(item, email);
+    let got = await fetchGoogle(item, email);
     if (got.ok) {
       try {
         await upload(item.url, got, filenameTitle(got.filename) || item.name, null);
-        saved.push(item.name);
+        saved.push(got.via === "page" ? `${item.name} (from the page view: downloading is off)` : item.name);
         continue;
       } catch (e) {
-        failed.push({ name: item.name, reason: "error", detail: String(e.message || e) });
-        continue;
+        got = uploadFailure(got, e);
       }
     }
     await reportFailure(item.url, got);
@@ -237,10 +265,13 @@ async function badge(tabId, ok, title) {
 
 // Fetch the export from inside the open doc: a same-origin request with first-party cookies, for
 // when the service worker's request didn't carry the sign-in (strict third-party-cookie settings).
-async function fetchInPage(tab, frameId, fetchUrl) {
+async function fetchInPage(tab, frameId, fetchUrl, via = "download") {
   try {
     const r = await chrome.tabs.sendMessage(tab.id, { type: "fetchHere", url: fetchUrl }, { frameId });
-    if (r && r.ok) return { ok: true, blob: new Blob([fromBase64(r.data)], { type: r.type }), filename: r.filename };
+    if (r && r.ok) {
+      const blob = new Blob([fromBase64(r.data)], { type: r.type });
+      return via === "page" ? { ok: true, via, blob, filename: "page-view.html" } : { ok: true, blob, filename: r.filename };
+    }
   } catch (e) {
     console.warn("in-page fetch failed", e);
   }
@@ -268,17 +299,25 @@ async function onOpened(msg, sender) {
 
 async function saveDoc(answer, pageTitle, tab, frameId, email) {
   let got = await fetchGoogle(answer, email);
-  if (!got.ok && tab && ["signin", "network"].includes(got.reason) && new URL(answer.fetch_url).origin === new URL(tab.url || answer.url).origin) {
-    got = (await fetchInPage(tab, frameId ?? 0, answer.fetch_url)) || got;
+  const sameOrigin = tab && new URL(answer.fetch_url).origin === new URL(tab.url || answer.url).origin;
+  if (!got.ok && sameOrigin && ["signin", "network", "restricted"].includes(got.reason)) {
+    // From inside the open doc: the export, else (downloading turned off) the page view.
+    got = (await fetchInPage(tab, frameId ?? 0, answer.fetch_url))
+      || (answer.page_url ? await fetchInPage(tab, frameId ?? 0, answer.page_url, "page") : null)
+      || got;
   }
   if (got.ok) {
     try {
       await upload(answer.url, got, filenameTitle(got.filename) || pageTitle, answer.assignment_id);
-      await badge(tab?.id, true, answer.assignment ? `Saved as your copy for ${answer.assignment}` : "Saved to Start Helper");
-      return { wanted: true, saved: true };
+      const saved = answer.assignment ? `Saved as your copy for ${answer.assignment}` : "Saved to Start Helper";
+      await badge(tab?.id, true, got.via === "page" ? `${saved} (read from the page view: downloading is off)` : saved);
+      return { wanted: true, saved: true, via: got.via || "download" };
     } catch (e) {
-      await badge(tab?.id, false, `Start Helper didn't take it: ${e.message || e}`);
-      return { wanted: true, saved: false, error: String(e.message || e) };
+      if (got.via !== "page") {
+        await badge(tab?.id, false, `Start Helper didn't take it: ${e.message || e}`);
+        return { wanted: true, saved: false, error: String(e.message || e) };
+      }
+      got = uploadFailure(got, e);
     }
   }
   await reportFailure(answer.url, got);

@@ -19,12 +19,16 @@
     return btoa(binary);
   }
 
+  // The export, or (when downloading is turned off) the doc's page view, which is HTML.
+  const PAGE_VIEW = /\/(mobilebasic|htmlpresent|htmlview\/sheet)$/;
+
   async function fetchHere(url) {
     const u = new URL(url);
-    if (u.origin !== location.origin || !u.pathname.includes("/export")) return { ok: false };
+    const page = PAGE_VIEW.test(u.pathname);
+    if (u.origin !== location.origin || !(page || u.pathname.includes("/export"))) return { ok: false };
     const r = await fetch(u, { credentials: "same-origin", cache: "no-store" });
     const type = r.headers.get("content-type") || "";
-    if (!r.ok || type.startsWith("text/html")) return { ok: false };
+    if (!r.ok || type.startsWith("text/html") !== page || new URL(r.url).origin !== location.origin) return { ok: false };
     const buffer = await r.arrayBuffer();
     if (buffer.byteLength > MAX_BYTES) return { ok: false };
     const disposition = r.headers.get("content-disposition") || "";

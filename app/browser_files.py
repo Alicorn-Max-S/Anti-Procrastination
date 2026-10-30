@@ -8,6 +8,11 @@ gdocs.py names its downloads, and the document reader picks them up through `sto
 `copies()`. When the extension can't get a file it says why (`save_failure()`), and `reason()`
 turns that into words for the card's "Open this doc".
 
+When the teacher turned off downloading, Max wants the doc read anyway (his call, Oct 30: that's
+usually a teacher's mistake). The extension then sends the doc's page view instead (Docs'
+/mobilebasic, Slides' /htmlpresent, Sheets' /htmlview/sheet); its text is kept as a .txt and the
+row says `via = "page"` so the card can tell the student where the text came from.
+
 Google Assignments copies never appear in Canvas. The extension reports docs opened from a Canvas
 assignment tab, and `opened()` decides whether that's the student's copy for that assignment.
 
@@ -19,6 +24,7 @@ import hashlib
 import hmac
 import io
 import re
+from html.parser import HTMLParser
 import secrets
 import sqlite3
 import sys
@@ -62,11 +68,24 @@ CREATE TABLE IF NOT EXISTS browser_files (   -- Google files the Chrome extensio
     status TEXT NOT NULL,                     -- stored | failed
     reason TEXT NOT NULL DEFAULT '',          -- a REASONS key when failed
     detail TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    via TEXT NOT NULL DEFAULT 'download'      -- download | page (text from the page view; downloading was off)
 );
 """
+_LATER_COLUMNS = [("via", "TEXT NOT NULL DEFAULT 'download'")]
+_ready: set[str] = set()  # DB files whose table is known to be current
+
+PAGE_VIEW_NOTE = "(Read from the page view: the teacher turned off downloading.)"
 
 _CANVAS_ASSIGNMENT = re.compile(r"/courses/(\d+)/assignments/(\d+)")
+
+# The server-rendered view of each kind of Google file, with its text in the HTML. Plain
+# /htmlview for Sheets is drawn by JavaScript now; /htmlview/sheet has the cells (first tab only).
+_PAGE_VIEWS = {
+    "document": "mobilebasic",
+    "presentation": "htmlpresent",
+    "spreadsheets": "htmlview/sheet?headers=false&gid=0",
+}
 
 
 class Ref(BaseModel):
@@ -76,6 +95,7 @@ class Ref(BaseModel):
     kind: str  # document | presentation | spreadsheets | drive
     fetch_url: str
     view_url: str  # the page the student opens; the extension loads it to tell no access from no download
+    page_url: str = ""  # server-rendered page view, read when downloading is turned off ("" for Drive files)
     prefix: str  # file-name prefix, matching gdocs.py (the reader treats google-slides- PDFs as slides)
 
 
@@ -85,6 +105,7 @@ class Stored(BaseModel):
     path: Path
     title: str = ""
     assignment_id: int | None = None
+    via: str = "download"  # "page" when the text came from the page view because downloading was off
 
 
 def ref(url: str) -> Ref | None:
@@ -93,11 +114,12 @@ def ref(url: str) -> Ref | None:
     export = gdocs.export_url(url)
     if not file_id or not export:
         return None
-    for kind in ("document", "presentation", "spreadsheets"):
+    for kind, page in _PAGE_VIEWS.items():
         if f"docs.google.com/{kind}/" in export:
             return Ref(
                 file_id=file_id, kind=kind, fetch_url=export,
                 view_url=f"https://docs.google.com/{kind}/d/{file_id}/edit",
+                page_url=f"https://docs.google.com/{kind}/d/{file_id}/{page}",
                 prefix="google-slides" if kind == "presentation" else "google",
             )
     # confirm=t skips Drive's "can't scan for viruses" page; the extension still stops at MAX_BYTES.
@@ -112,7 +134,17 @@ def ref(url: str) -> Ref | None:
 
 
 def _ensure(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Create the table, or add columns an older version of it lacks (once per DB file)."""
+    where = conn.execute("PRAGMA database_list").fetchone()["file"]  # "" for an in-memory DB
+    if where and where in _ready:
+        return conn
     conn.executescript(SCHEMA)
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(browser_files)")}
+    for column, definition in _LATER_COLUMNS:
+        if column not in have:
+            conn.execute(f"ALTER TABLE browser_files ADD COLUMN {column} {definition}")
+    conn.commit()
+    _ready.add(where)
     return conn
 
 
@@ -129,7 +161,7 @@ def _stored(row: sqlite3.Row | None) -> Stored | None:
         return None
     return Stored(
         file_id=row["file_id"], url=row["url"], path=Path(row["path"]), title=row["title"],
-        assignment_id=row["assignment_id"],
+        assignment_id=row["assignment_id"], via=row["via"],
     )
 
 
@@ -354,6 +386,71 @@ def _suffix(data: bytes, filename: str) -> str:
     raise UploadError("not a file type Start Helper can read")
 
 
+class _PageText(HTMLParser):
+    """The readable text of a Google page view: block elements become line breaks, scripts and
+    styles are dropped. Slides come as SVG, one <svg> per slide and a <text> per line."""
+
+    _SKIP = {"script", "style", "noscript", "head", "template"}
+    _BLOCKS = {
+        "p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "section",
+        "article", "ul", "ol", "blockquote", "pre", "hr", "text",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.title = ""
+        self._skip = 0
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title":
+            self._in_title = True
+        elif tag in self._SKIP:
+            self._skip += 1
+        elif tag == "svg":
+            self.parts.append("\n\n")  # a new slide
+        elif tag in ("td", "th"):
+            self.parts.append("\t")
+        elif tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        elif tag in self._SKIP:
+            self._skip = max(0, self._skip - 1)
+        elif tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+        elif not self._skip:
+            self.parts.append(data)
+
+
+def page_text(html: str) -> tuple[str, str]:
+    """(title, text) of a Docs/Slides/Sheets page view."""
+    parser = _PageText()
+    parser.feed(html)
+    text = re.sub(r"[ \t\xa0]+", " ", "".join(parser.parts))
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    title = re.sub(r"\s*-\s*Google (Docs|Slides|Sheets|Drive)\s*$", "", parser.title.strip())
+    return title, text
+
+
+def _from_page(r: Ref, data: bytes) -> tuple[str, bytes]:
+    """The text file to keep for a page view the extension sent, and the page's title."""
+    if r.kind not in _PAGE_VIEWS:
+        raise UploadError("Drive files have no page view to read")
+    title, text = page_text(data.decode("utf-8", errors="replace"))
+    if len(text) < 40:
+        raise UploadError("the page view had no text in it")
+    return title, f"{title}\n{PAGE_VIEW_NOTE}\n\n{text}\n".encode("utf-8")
+
+
 def _accept(conn: sqlite3.Connection, url: str, assignment_id: int | None, now: datetime) -> tuple[Ref, list[int]]:
     """Check an upload is for a file Start Helper asked for. Returns its ref and the assignments
     it belongs to."""
@@ -391,16 +488,25 @@ def save_upload(
     title: str = "",
     assignment_id: int | None = None,
     now: datetime | None = None,
+    via: str = "download",
 ) -> dict:
-    """Keep a file the extension downloaded. Cards that use it are marked for one rebuild, but
-    only when the bytes are new, so fetching the same file again never costs a model call."""
+    """Keep a file the extension downloaded, or the text of a page view when downloading was
+    turned off (`via="page"`). Cards that use it are marked for one rebuild, but only when the
+    content is new, so fetching the same file again never costs a model call."""
     now = now or datetime.now(timezone.utc)
     if len(data) > MAX_BYTES:
         raise UploadError(f"too big ({len(data) / 1e6:.0f} MB)")
     if not data:
         raise UploadError("an empty file")
+    if via not in ("download", "page"):
+        raise UploadError(f"unknown way of getting it {via!r}")
     r, assignment_ids = _accept(conn, url, assignment_id, now)
-    suffix = _suffix(data, filename)
+    if via == "page":
+        page_title, data = _from_page(r, data)
+        title = title or page_title
+        suffix = ".txt"
+    else:
+        suffix = _suffix(data, filename)
     folder = _folder()
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{r.prefix}-{r.file_id}{suffix}"
@@ -417,13 +523,13 @@ def save_upload(
     name = title.strip() or Path(filename).stem or (old["title"] if old is not None else "")
     conn.execute(
         "INSERT OR REPLACE INTO browser_files "
-        "(file_id, url, assignment_id, path, title, sha256, status, reason, detail, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'stored', '', '', ?)",
-        (r.file_id, url, copy_for, str(path), name[:200], sha, now.isoformat()),
+        "(file_id, url, assignment_id, path, title, sha256, status, reason, detail, updated_at, via) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'stored', '', '', ?, ?)",
+        (r.file_id, url, copy_for, str(path), name[:200], sha, now.isoformat(), via),
     )
     conn.commit()
     marked = _mark_stale(conn, assignment_ids) if is_new else []
-    return {"file_id": r.file_id, "new": is_new, "assignments": assignment_ids, "cards_marked": marked}
+    return {"file_id": r.file_id, "new": is_new, "via": via, "assignments": assignment_ids, "cards_marked": marked}
 
 
 def save_failure(

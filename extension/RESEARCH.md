@@ -54,7 +54,18 @@ Without a sign-in, `…/export` redirects to Google's login page ([a scraper's n
 
 The owner can turn off download, print and copy for viewers and commenters. One switch covers all three, and it removes the download entry points in Drive, Docs, Sheets and Slides ([Google, 2015](https://workspaceupdates.googleblog.com/2015/07/disable-downloading-printing-and.html)). Teachers' files are usually shared with download on, which is the default.
 
-The known ways around it are the Docs `/mobilebasic` HTML view and scraping the rendered page ([example tutorial](https://dev.to/remoteseoconsultant/how-to-copy-a-view-only-google-doc-2593)). Both defeat a setting the teacher chose on purpose. **Not built.** The extension uses only the normal export and download URLs, so it relies on Google enforcing the setting there. If Google refuses, the file is reported as `restricted`. The in-page fallback (section 1) uses the same export URL, so it can't get around the setting either. The card says "Open this doc" with the reason "the teacher turned off downloading", and Max reads it himself. This is flagged to the manager, so Max can decide otherwise if he really wants to.
+The known ways around it are the Docs `/mobilebasic` HTML view and scraping the rendered page ([example tutorial](https://dev.to/remoteseoconsultant/how-to-copy-a-view-only-google-doc-2593)).
+
+**Max's decision (Oct 30): read them anyway.** In his classes the setting is usually a teacher's mistake, not a choice. So when the export is refused and the view page says the doc opens (`restricted`), the extension fetches the doc's server-rendered page view and sends the HTML with `via=page`. The server keeps only the text, as a `.txt` that starts with "(Read from the page view: the teacher turned off downloading.)", and records `via = "page"` on the row (`browser_files.stored(url).via`), so the card can say where the text came from. The reader reads it like any other text file.
+
+| Kind | Page view | Checked on a public file, Oct 30 |
+| --- | --- | --- |
+| Docs | `/document/d/ID/mobilebasic` | Plain HTML, full text in paragraphs and tables. |
+| Slides | `/presentation/d/ID/htmlpresent` | Each slide is an SVG with a `<text>` per line; all slides' text is in the page. |
+| Sheets | `/spreadsheets/d/ID/htmlview/sheet?headers=false&gid=0` | Plain `/htmlview` is now drawn by JavaScript and has no cells in the HTML. `/htmlview/sheet` has them, first tab only. |
+| Drive files (PDF, Word, images) | none | Still reported as `restricted`; Max opens them. |
+
+What isn't verified: no download-disabled file was available, so it's untested whether Google serves these views for one. The tutorial above says `/mobilebasic` works for view-only Docs. If a page view fails, or has under 40 characters of text, the file stays `restricted` and the card says "Open this doc", as before. When the doc is open in a tab and the service worker's request lacks the sign-in, the content script fetches the same page view from inside the doc (same-origin, like the export fallback in section 1). The same rules hold as for downloads: only Canvas-listed links (or a matched Google Assignments copy), only `docs.google.com`, only to the configured server, no cookies read.
 
 ## 4. Google Assignments
 
@@ -96,7 +107,7 @@ It captures the copy once, when it's first seen, so the card gets the template i
 - The extension fetches only what the server lists, or a doc Max opened that the server says it wants. Before fetching, it checks the URL is `https:` on `docs.google.com`, `drive.google.com` or `drive.usercontent.google.com`. Redirects stay inside the Google host permissions.
 - It only ever uploads to the configured server URL, with the key.
 - The server lists only Google links found in Canvas assignment descriptions for upcoming work, plus Google Assignments copies matched as above.
-- Uploads are checked server-side: 25 MB max, real file signature (PDF, Office ZIP, image). An HTML sign-in page is rejected even if the extension mislabels it.
+- Uploads are checked server-side: 100 MB max, real file signature (PDF, Office ZIP, image). An HTML sign-in page is rejected even if the extension mislabels it. HTML is accepted only as a page view (`via=page`) of a Docs, Slides or Sheets link, and only its text is kept.
 
 ## 8. Checked in a real Chrome (Oct 30)
 
@@ -107,7 +118,9 @@ Branded Chrome no longer honours `--load-extension` (silently ignored in 156, ev
 - Opening a public Google Doc linked from a test assignment ran the whole chain: content script, then `/api/ext/opened`, then the export fetch in the service worker, then the upload. The tab's badge showed ✓, and the server stored a real PDF.
 - The polling run saved 4 PDFs: the Docs links in Max's upcoming work are actually exportable without sign-in. The 2 Drive files hit the sign-in redirect and were reported as `signin`, which is the right answer for an unsigned profile.
 
-What only Max's signed-in run can show: the cookies on service-worker requests, `authuser=<email>`, and the `restricted`/`no_access` split. Those are the checklist in the final report.
+- Page views (later the same day): the service worker fetched a public Doc's `/mobilebasic` (200, `text/html`, still on `docs.google.com`) and posted it with `via=page`. The server stored 5.8k characters of clean text as `google-<id>.txt`, marked `via = "page"`.
+
+What only Max's signed-in run can show: the cookies on service-worker requests, `authuser=<email>`, the `restricted`/`no_access` split, and whether Google serves page views of a download-disabled file. Those are the checklist in the final report.
 
 ## 9. Design summary
 
@@ -117,6 +130,7 @@ Canvas (token) ──> server: assignment descriptions ──> Google links it c
 Chrome extension (Max's signed-in browser)                 │
   every 10 min: GET  /api/ext/needed  <────────────────────┘
   for each: fetch export with Max's sign-in ── ok ──> POST /api/ext/files (bytes)
+                                          ├─ downloading off ─> page view ─> POST /api/ext/files (HTML, via=page)
                                           └─ fails ─> POST /api/ext/failed (reason)
   doc opened: POST /api/ext/opened {url, opener Canvas URL} -> wanted? -> fetch + upload
 server: stores the file under its Google id, the reader uses it on the next card build,

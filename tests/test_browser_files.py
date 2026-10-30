@@ -183,6 +183,83 @@ def test_opened_doc_linked_from_canvas_is_wanted_even_after_a_failure(seeded):
     assert not browser_files.opened(seeded, DOC, "", NOW)["wanted"]
 
 
+# What Google's page views look like, cut down: Docs' /mobilebasic is plain HTML, Slides'
+# /htmlpresent draws each slide as SVG with a <text> per line.
+DOC_PAGE = """<!DOCTYPE html><html><head><title>Lab handout - Google Docs</title>
+<style>.c1{font-weight:700}</style><script>var x = "not text";</script></head>
+<body><div class="doc-content"><p class="c1"><span>Titration lab</span></p>
+<p><span>Fill the burette to 0.00&nbsp;mL.</span></p><ul><li>Record the start volume</li><li>Add 3 drops</li></ul>
+<table><tr><td>Trial</td><td>Volume</td></tr><tr><td>1</td><td>12.4</td></tr></table></div></body></html>"""
+SLIDES_PAGE = """<html><head><title>Notes - Google Slides</title></head><body>
+<svg><g><text><tspan>Moles and mass</tspan></text><text><tspan>n = m / M</tspan></text></g></svg>
+<svg><g><text><tspan>Practice: 18 g of water is how many moles?</tspan></text></g></svg></body></html>"""
+
+
+def test_page_text_keeps_the_words_and_drops_the_page():
+    title, text = browser_files.page_text(DOC_PAGE)
+    assert title == "Lab handout"
+    assert "not text" not in text and "font-weight" not in text
+    assert text.splitlines()[:4] == ["Titration lab", "", "Fill the burette to 0.00 mL.", ""]
+    assert "Record the start volume" in text and "1 12.4" in text
+    title, text = browser_files.page_text(SLIDES_PAGE)
+    assert title == "Notes"
+    assert "Moles and mass\n\nn = m / M\n\nPractice: 18 g of water is how many moles?" == text
+
+
+def test_a_page_view_is_kept_as_text_when_downloading_is_off(seeded):
+    assert browser_files.ref(DOC).page_url == "https://docs.google.com/document/d/DOC_aaaaaaaaaaaaaaaaaaaa/mobilebasic"
+    assert browser_files.ref(SLIDES).page_url.endswith("/htmlpresent") and browser_files.ref(DRIVE).page_url == ""
+    db.save_card(seeded, PrepCard(assignment_id=1, kind="lab", summary="", first_step="", steps=[]))
+
+    got = browser_files.save_upload(seeded, DOC, DOC_PAGE.encode(), "page-view.html", now=NOW, via="page")
+    assert got["new"] and got["via"] == "page" and got["cards_marked"] == [1]
+    s = browser_files.stored(DOC)
+    assert s.via == "page" and s.title == "Lab handout" and s.path.name == "google-DOC_aaaaaaaaaaaaaaaaaaaa.txt"
+    text = s.path.read_text(encoding="utf-8")
+    assert text.startswith(f"Lab handout\n{browser_files.PAGE_VIEW_NOTE}\n\nTitration lab")
+
+    # Downloading turned back on: the real file replaces the page text.
+    browser_files.save_upload(seeded, DOC, PDF, "Lab handout.pdf", now=NOW)
+    s = browser_files.stored(DOC)
+    assert s.via == "download" and s.path.suffix == ".pdf" and not s.path.with_suffix(".txt").exists()
+
+
+def test_a_page_view_needs_text_and_a_docs_slides_or_sheets_file(seeded):
+    with pytest.raises(UploadError, match="no page view"):
+        browser_files.save_upload(seeded, DRIVE, DOC_PAGE.encode(), now=NOW, via="page")
+    with pytest.raises(UploadError, match="no text"):
+        browser_files.save_upload(seeded, DOC, b"<html><title>Sign in</title><body> </body></html>", now=NOW, via="page")
+    with pytest.raises(UploadError, match="web page"):  # a page sent as a download is still refused
+        browser_files.save_upload(seeded, DOC, DOC_PAGE.encode(), "export", now=NOW)
+    with pytest.raises(UploadError):
+        browser_files.save_upload(seeded, DOC, DOC_PAGE.encode(), now=NOW, via="scrape")
+    assert browser_files.stored(DOC) is None
+
+
+def test_an_older_table_gets_the_via_column(conn, monkeypatch):
+    monkeypatch.setattr(browser_files, "_ready", set())
+    conn.execute("DROP TABLE IF EXISTS browser_files")
+    conn.execute(
+        "CREATE TABLE browser_files (file_id TEXT PRIMARY KEY, url TEXT NOT NULL, assignment_id INTEGER, path TEXT, "
+        "title TEXT NOT NULL DEFAULT '', sha256 TEXT, status TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', "
+        "detail TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)"
+    )
+    conn.execute("INSERT INTO browser_files VALUES ('DOC_aaaaaaaaaaaaaaaaaaaa', ?, NULL, NULL, '', NULL, 'failed', "
+                 "'signin', '', ?)", (DOC, NOW.isoformat()))
+    conn.commit()
+    assert browser_files.reason(DOC, conn) == browser_files.REASONS["signin"]
+    assert {r["name"] for r in conn.execute("PRAGMA table_info(browser_files)")} >= {"via"}
+
+
+def test_the_reader_reads_a_page_view(seeded, monkeypatch):
+    from app import gdocs, reader
+
+    monkeypatch.setattr(gdocs, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(401))))
+    browser_files.save_upload(seeded, SLIDES, SLIDES_PAGE.encode(), now=NOW, via="page")
+    docs = {d.url: d for d in reader.read_assignment(db.get_assignment(seeded, 1))}
+    assert docs[SLIDES].readable and "n = m / M" in docs[SLIDES].text and browser_files.PAGE_VIEW_NOTE in docs[SLIDES].text
+
+
 def test_the_reader_uses_uploads_and_copies(seeded, monkeypatch):
     """Across lanes: ingest's reader reads what the extension stored, without fetching Google."""
     from app import gdocs, reader
@@ -240,6 +317,12 @@ def test_extension_round_trip_over_http(client, seeded):
     r = client.post("/api/ext/failed", headers=h, json={"url": SLIDES, "reason": "restricted", "detail": "HTTP 403"})
     assert r.status_code == 200 and browser_files.reason(SLIDES) == browser_files.REASONS["restricted"]
     assert client.post("/api/ext/failed", headers=h, json={"url": SLIDES, "reason": "nope"}).status_code == 422
+
+    page = {"file": ("page-view.html", SLIDES_PAGE.encode(), "text/html")}
+    r = client.post("/api/ext/files", headers=h, data={"url": SLIDES, "via": "page"}, files=page)
+    assert r.status_code == 200 and r.json()["via"] == "page" and browser_files.stored(SLIDES).via == "page"
+    r = client.post("/api/ext/files", headers=h, data={"url": DRIVE, "via": "page"}, files=page)
+    assert r.status_code == 422 and "no page view" in r.json()["detail"]
 
     r = client.post("/api/ext/opened", headers=h, json={"url": COPY, "opener_url": f"{CANVAS}/courses/1/assignments/5"})
     assert r.json()["wanted"] and r.json()["assignment_id"] == 5
