@@ -80,6 +80,38 @@ class PracticeQuestion(BaseModel):
     verified: bool = False  # True when an independent second solve agreed with `answer`
 
 
+class SourceFile(BaseModel):
+    """A file or linked doc the card tried to read, shown on the card so the student knows what it saw."""
+
+    name: str
+    url: str = ""
+    read: bool = True
+    reason: str = ""  # why it couldn't be opened, e.g. "shared only inside the school"
+    pages: int | None = None  # real page count (book pages, not PDF pages) when known
+
+
+class ReadingSitting(BaseModel):
+    """One sitting of a reading: a run of whole sections, by printed page numbers."""
+
+    first_page: str
+    last_page: str
+    sections: list[str]
+    words: int
+    minutes: int
+
+
+class ReadingPlan(BaseModel):
+    """How long a reading really is and where to stop, worked out from the file's text."""
+
+    file: str
+    first_page: str
+    last_page: str
+    pages: int
+    words: int
+    minutes: int
+    sittings: list[ReadingSitting] = Field(default_factory=list)
+
+
 class PrepCard(BaseModel):
     assignment_id: int
     kind: AssignmentKind
@@ -92,6 +124,9 @@ class PrepCard(BaseModel):
     practice: list[PracticeQuestion] = Field(default_factory=list)  # test cards only
     focus: str = ""  # test cards: which weak spots the practice set targets
     generated_by: Literal["model", "fallback", "demo"] = "model"
+    sources: list[SourceFile] = Field(default_factory=list)  # what the card was built from
+    instructions_seen: bool = True  # False when there was no description and no readable file
+    reading: ReadingPlan | None = None  # readings with a readable file
 
 
 # ---- Schedule / loop --------------------------------------------------------------------------
