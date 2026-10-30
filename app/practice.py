@@ -129,9 +129,7 @@ def second_solve(questions: list[PracticeQuestion]) -> list[PracticeQuestion]:
 
 def _is_key(doc: Material) -> bool:
     """Answer keys never become a question's source: the student should work from the sheet."""
-    from app.prep import is_answer_key  # prep imports this module
-
-    return is_answer_key(doc.title)
+    return materials.is_answer_key(doc.title)
 
 
 def _feedback_lines(conn: sqlite3.Connection, course_id: int, unit_feedback: list[Material]) -> str:

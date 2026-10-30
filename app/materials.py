@@ -38,6 +38,8 @@ CHUNK_CHARS = 1_500
 MAX_DOCS = 20  # documents read per unit, so a huge module can't mean dozens of downloads
 MODULES_TTL = timedelta(hours=1)
 NEARBY_DAYS = 28
+OUTLINE_CHARS = 6_000  # the unit outline cards put in a test card's prompt
+SCAN_NOTE = "a scan with no text to read"
 
 MaterialKind = Literal["file", "page", "assignment", "google", "feedback"]
 
@@ -203,7 +205,7 @@ def read_file(path: Path) -> tuple[list[str], str]:
     """Text per page of a downloaded file (via the document reader), and why not when there's none."""
     pages, reason = reader.text_pages(path)
     if not pages and reader.read_document(path).readable:  # both cached
-        reason = "a scan with no text to read"
+        reason = SCAN_NOTE
     return pages, reason
 
 
@@ -231,20 +233,21 @@ def _cache_path(key: str) -> Path:
 
 
 def _cached(key: str, load) -> tuple[list[str], str]:
-    """Pages for a source, read once: a hit returns the stored text; text only gets stored when
-    there is some, so a failed download is tried again next time."""
+    """Pages for a source, read once. Text and "it's a scan" are stored; other failures aren't, so
+    a failed download (or a school-only doc the extension uploads later) is tried again next time."""
     path = _cache_path(key)
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))["pages"], ""
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data["pages"], data.get("note", "")
     try:
         pages, note = load()
     except httpx.HTTPError as e:
         log.warning("reading %s failed: %s", key, e)
         return [], "couldn't download it"
     pages = [p for p in pages if p.strip()]
-    if pages:
+    if pages or note == SCAN_NOTE:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"pages": pages}), encoding="utf-8")
+        path.write_text(json.dumps({"pages": pages, "note": note}), encoding="utf-8")
     return pages, note
 
 
@@ -438,3 +441,160 @@ def excerpts(materials: list[Material], topic: str, budget: int = BUDGET_CHARS) 
         Excerpt(id=f"S{n}", title=materials[d].title, url=materials[d].url, page=page, text=text)
         for n, (d, _, page, text) in enumerate(picked, 1)
     ]
+
+
+# ---- outline for card steps -------------------------------------------------------------------
+
+
+def is_answer_key(title: str) -> bool:
+    """Answer keys are for checking work, never a source to work from (prep's rule)."""
+    from app.prep import is_answer_key as named_like_a_key  # prep imports practice, which imports this
+
+    return named_like_a_key(title)
+
+
+class Part(BaseModel):
+    label: str  # "problem 3", "p. 4", or "" for a section heading
+    text: str  # the problem's first line, the slide's title, or the heading
+
+
+class DocOutline(BaseModel):
+    """One unit document as a list of what's in it, so a card's steps can name exact problems and slides."""
+
+    title: str
+    url: str
+    kind: MaterialKind
+    answer_key: bool  # check answers with it only
+    readable: bool
+    note: str = ""  # why it wasn't read
+    pages: int = 0
+    parts: list[Part] = Field(default_factory=list)
+
+
+_PROBLEM = re.compile(r"^\s*(\d{1,2})[.)]\s+(\S.*)$")
+
+
+def _clip(text: str, n: int = 90) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _is_heading(line: str) -> bool:
+    return 4 <= len(line) <= 60 and "__" not in line and not line.endswith((".", ",", "?", ";"))
+
+
+def _problems(lines: list[str]) -> list[Part]:
+    """Numbered problems, labelled so each label is unambiguous. Numbering that restarts under a
+    new heading ("Problem Set #2") is a new section; numbering that restarts without one is the
+    sub-questions of the problem before it ("problem 12, part 2"), until the next number resumes."""
+    found: list[tuple[str, str, str]] = []  # (section, label, text)
+    heading = section = ""
+    last, parent, new_heading = 0, None, False
+    for line in lines:
+        match = _PROBLEM.match(line)
+        if match is None:
+            if _is_heading(line):
+                heading, new_heading = line.rstrip(":"), True
+            continue
+        n, text = int(match.group(1)), match.group(2)
+        if parent is not None:
+            if n != parent + 1:
+                found.append((section, f"problem {parent}, part {n}", text))
+                continue
+            parent = None
+        if n <= last:
+            if not new_heading:
+                parent = last
+                found.append((section, f"problem {parent}, part {n}", text))
+                continue
+            section = heading
+        if last == 0:
+            section = heading
+        found.append((section, f"problem {n}", text))
+        last, new_heading = n, False
+    sections = len({s for s, _, _ in found}) > 1
+    return [Part(label=f"{s}, {label}" if sections and s else label, text=_clip(t)) for s, label, t in found]
+
+
+def _slides(pages: list[str]) -> list[Part]:
+    """Each page's first line, with runs of same-titled pages ("Relative Velocity Example #19" ...
+    "#29") merged into one range."""
+    titles = [(n, _clip(page.strip().splitlines()[0])) for n, page in enumerate(pages, 1) if page.strip()]
+    out: list[Part] = []
+    run: list[tuple[int, str]] = []
+
+    def flush() -> None:
+        if len(run) == 1:
+            out.append(Part(label=f"p. {run[0][0]}", text=run[0][1]))
+        elif run:
+            out.append(Part(label=f"pp. {run[0][0]}–{run[-1][0]}", text=f"{run[0][1]} to {run[-1][1]}"))
+
+    for n, title in titles:
+        if run and re.sub(r"[\d#]+", "", title).strip() != re.sub(r"[\d#]+", "", run[-1][1]).strip():
+            flush()
+            run = []
+        run.append((n, title))
+    flush()
+    return out
+
+
+def _parts(m: Material) -> list[Part]:
+    """Numbered problems when the document has them, else its pages (slides), else its short
+    heading-like lines."""
+    lines = [line.strip() for page in m.pages for line in page.splitlines() if line.strip()]
+    if sum(1 for line in lines if _PROBLEM.match(line)) >= 2:
+        return _problems(lines)
+    if len(m.pages) > 1:
+        return _slides(m.pages)
+    return [Part(label="", text=_clip(h)) for h in [l for l in lines if _is_heading(l)][:12]]
+
+
+def unit_outline(conn: sqlite3.Connection, assignment: Assignment) -> tuple[Unit, list[DocOutline]]:
+    """The unit this assignment belongs to and an outline of each of its documents, in module order.
+    No model calls; Canvas and Google reads are cached, so add_practice reuses them."""
+    unit = find_unit(conn, assignment)
+    out = [
+        DocOutline(
+            title=m.title, url=m.url, kind=m.kind, answer_key=is_answer_key(m.title), readable=m.readable,
+            note=m.note, pages=len(m.pages), parts=_parts(m),
+        )
+        for m in gather(conn, assignment, unit) if m.kind != "feedback"
+    ]
+    return unit, out
+
+
+def outline_text(unit: Unit, docs: list[DocOutline], max_chars: int = OUTLINE_CHARS) -> str:
+    """The outline as prompt text, in module order. Every document gets its title line; the parts
+    go to review sheets and homework first, then slides, then labs, until max_chars is used up,
+    and a cut document says how many parts it left out."""
+    where = "Canvas module" if unit.from_module else "assignments due before this one"
+    heads = []
+    for d in docs:
+        tags = []
+        if d.answer_key:
+            tags.append("answer key: for checking answers only")
+        if not d.readable:
+            tags.append(f"not read: {d.note or 'no text'}")
+        elif d.pages > 1:
+            tags.append(f"{d.pages} pages")
+        heads.append(f"- {d.title}" + (f" ({'; '.join(tags)})" if tags else ""))
+    parts = [[f"    {p.label}: {p.text}" if p.label else f"    {p.text}" for p in d.parts] for d in docs]
+    used = len(unit.name) + len(where) + 20 + sum(len(h) + 1 for h in heads)
+    keep = [0] * len(docs)
+    for rank in sorted({_priority(d.title) for d in docs}):
+        open_ = [i for i, d in enumerate(docs) if _priority(d.title) == rank]
+        while open_:  # documents of the same rank take turns
+            for i in list(open_):
+                line = parts[i][keep[i]] if keep[i] < len(parts[i]) else None
+                if line is None or used + len(line) + 1 > max_chars:
+                    open_.remove(i)
+                    continue
+                keep[i] += 1
+                used += len(line) + 1
+    lines = [f"Unit: {unit.name} ({where})"]
+    for head, d_parts, n in zip(heads, parts, keep):
+        lines.append(head)
+        lines.extend(d_parts[:n])
+        if n < len(d_parts):
+            lines.append(f"    … {len(d_parts) - n} more")
+    return "\n".join(lines)

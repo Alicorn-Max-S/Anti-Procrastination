@@ -266,3 +266,54 @@ def test_practice_without_materials_still_works(conn, model):
     assert "(no readable documents" in prompts[0][0]
     assert [p.prompt for p in card.practice] == ["a", "b"] and card.practice[0].source == ""
     assert "Built from" not in card.focus
+
+
+# ---- unit outline for card steps --------------------------------------------------------------
+
+
+def test_problems_label_sections_and_sub_questions():
+    lines = [
+        "Problem Set #1", "1. Three equal forces.", "2. Four equal forces.",
+        "Problem Set #2", "1. Two equal, one double.",
+    ]
+    assert [p.label for p in materials._problems(lines)] == [
+        "Problem Set #1, problem 1", "Problem Set #1, problem 2", "Problem Set #2, problem 1",
+    ]
+    lines = ["11. A race on a river.", "12. A boat crosses a river.", "1. Velocity?", "2. Drift?", "13. A swimmer.",
+             "Challenge Problems:", "14. Rick and Jane."]
+    assert [p.label for p in materials._problems(lines)] == [
+        "problem 11", "problem 12", "problem 12, part 1", "problem 12, part 2", "problem 13", "problem 14",
+    ]
+
+
+def test_slides_merge_runs_of_same_titled_pages():
+    pages = ["RELATIVITY\nintro", "Relative Velocity EXAMPLE #11\nx", "Relative Velocity EXAMPLE #12\nx", "Unit Vectors\nx"]
+    assert [(p.label, p.text) for p in materials._slides(pages)] == [
+        ("p. 1", "RELATIVITY"),
+        ("pp. 2–3", "Relative Velocity EXAMPLE #11 to Relative Velocity EXAMPLE #12"),
+        ("p. 4", "Unit Vectors"),
+    ]
+
+
+def test_unit_outline_marks_answer_keys_and_unread_docs(course, canvas_api, google):
+    unit, docs = materials.unit_outline(course, TEST)
+    by_title = {d.title: d for d in docs}
+    assert unit.name == "Unit 2: Vectors" and "Feedback on Vectors HW" not in by_title
+    assert by_title["KEY: Vectors HW"].answer_key and not by_title["Unit Vectors Practice"].answer_key
+    assert [p.label for p in by_title["Unit Vectors Practice"].parts] == ["problem 1", "problem 2"]
+    text = materials.outline_text(unit, docs)
+    assert text.startswith("Unit: Unit 2: Vectors (Canvas module)")
+    assert "- KEY: Vectors HW (answer key: for checking answers only)" in text
+    assert "- Extra Practice (not read: shared only inside the school)" in text
+    assert "    problem 2: Write <6, 8> in i, j form." in text
+
+
+def test_outline_budget_goes_to_review_sheets_before_slides():
+    unit = materials.Unit(name="U", from_module=True, items=[])
+    slides = materials.DocOutline(title="Presentation", url="", kind="file", answer_key=False, readable=True, pages=30,
+                                  parts=[materials.Part(label=f"p. {n}", text="x" * 60) for n in range(30)])
+    review = materials.DocOutline(title="Test Review", url="", kind="google", answer_key=False, readable=True,
+                                  parts=[materials.Part(label=f"problem {n}", text="y" * 60) for n in range(10)])
+    text = materials.outline_text(unit, [slides, review], max_chars=1_200)
+    assert len(text) <= 1_300 and text.count("problem ") == 10
+    assert "- Presentation (30 pages)" in text and "more" in text.split("- Test Review")[0]
