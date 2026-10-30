@@ -281,6 +281,7 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 "html_url": a.html_url,
                 "course_id": a.course_id,
                 "notes_medium": prep.notes_medium(conn, a.course_id),
+                "writes": prep.has_writing(card),  # the card may ask where this course's notes live
                 "done": a.id in done,
                 "next_block": nb.start.isoformat() if nb else None,
                 "missed": missed.get(a.id),
@@ -471,10 +472,12 @@ class NotesIn(BaseModel):
 
 @app.put("/api/courses/{course_id}/notes")
 def set_course_notes(course_id: int, body: NotesIn, conn=Depends(get_conn)) -> dict:
-    """Where this course's notes are kept ("paper" / "doc" / null for not set). Cards built after
-    this use it; existing cards change when regenerated."""
+    """Where this course's notes are kept ("paper" / "doc" / null for not set). A change marks the
+    course's upcoming cards stale, so the next sync rebuilds them; `stale` lists their ids."""
+    changed = prep.notes_medium(conn, course_id) != body.medium
     prep.set_notes_medium(conn, course_id, body.medium)
-    return {"course_id": course_id, "medium": body.medium}
+    stale = prep.mark_course_stale(conn, course_id, clock.now()) if changed else []
+    return {"course_id": course_id, "medium": body.medium, "stale": stale}
 
 
 # ---- simulated clock --------------------------------------------------------------------------

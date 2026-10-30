@@ -271,7 +271,10 @@ body.modal-open { overflow: hidden; }
 .sources p { margin: 0.15rem 0; overflow-wrap: anywhere; }
 .sources a { color: inherit; }
 .sources a.open-doc { display: inline-block; margin-left: 0.15rem; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); text-decoration: none; font-weight: 600; white-space: nowrap; }
-.card-foot select.notes-medium { font: inherit; font-size: 0.85rem; padding: 0.15rem 0.3rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.notes-ask { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0 0; }
+.notes-ask p { margin: 0 0 0.4rem; font-weight: 600; }
+.notes-settings { display: grid; gap: 0.35rem; }
+.notes-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
 .card details { margin: 0.5rem 0; }
 .card summary { cursor: pointer; font-weight: 600; }
 .steps { padding-left: 1.2rem; margin: 0.4rem 0; }

@@ -26,7 +26,7 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel, Field
 
-from app import canvas, db, meta_client, practice, reader, reading, student_model
+from app import canvas, db, materials, meta_client, practice, reader, reading, student_model
 from app.clock import as_local
 from app.config import settings
 from app.meta_client import MetaError
@@ -55,11 +55,17 @@ The point is to make starting effortless, not to do the work.
 - first_step: ONE physical action that takes about two minutes and needs no thinking: opening,
   finding, copying, labeling, or reading a few lines. Name the exact file, page, problem or
   section. Make it the first real piece of the work, shrunk: "Open the Lab 4 handout and read
-  step 1 of the procedure", "Copy problem 1 of the worksheet to your notes", "Read the first
-  stanza of 'A Litany for Survival'". Copying titles or headings is a ritual, not a start. It must
-  not ask the student to solve, answer, analyze, summarize or decide anything. Never "review the
+  step 1 of the procedure", "Write out problem 1 of the worksheet", "Read the first stanza of
+  'A Litany for Survival'". Copying titles or headings is a ritual, not a start. It must not ask
+  the student to solve, answer, analyze, summarize or decide anything. Never "review the
   material" or "get started".
-- Where the student writes: follow the Notes line in the prompt. Don't pick a doc or paper yourself.
+- Where the student writes: follow the Notes line in the prompt, and name the place at most once
+  on the whole card, in the first step that has the student write. Never attach it to watching,
+  reading, opening, checking or bringing ("watch the video in your notes" is nonsense).
+- Files and links: call them by what they are ("the answer key", "the lab handout", "the chapter
+  PDF", "the Khan Academy video"), or by their title when it is a real name ("Test Review:
+  Vectors"). Never paste link text that is a phrase ("KEY is provided here", "click here") into a
+  sentence.
 - steps: 3 to 7 short imperative steps in order, specific to this assignment, covering everything
   the rubric and instructions ask for.
 - summary: one or two sentences on what has to be turned in.
@@ -75,11 +81,21 @@ The point is to make starting effortless, not to do the work.
   questions where they fit. Notes follow the pages, not the questions: a question may come up in
   several sittings or none. Start each note "Look for" and don't repeat the pages. The first step
   starts sitting 1 at its first page. Otherwise reading_notes is [].
+- Tests: when Unit materials are given and this is a test, every step names a unit document by its
+  title and, where the outline lists them, the exact problems, pages or slides, with their topic:
+  "Redo Test Review: Vectors problems 10-14 (relative motion)", "Re-read Presentation: Vectors &
+  Relative Motion (Part 2) pp. 9-15 (relative velocity examples)", "Do the practice set below,
+  then check what you missed against Test Review: Vectors KEY". Weight the steps toward the
+  student's weak topics in Past feedback. Never "gather your notes", "review the material" or
+  "recheck the assignment".
 - watch_out: ONE sentence naming a specific mistake from the Past feedback list that this
   assignment could repeat: an item from the same kind of work, or one sharing a rubric criterion.
   Quote the teacher's criticism in double quotes. Never use praise, grades, or notes about where
-  to find feedback. If nothing fits, you may instead quote a warning the teacher wrote in these
-  instructions. Otherwise "". Quote exactly; never invent or reword anything inside quotes.
+  to find feedback. If nothing fits, quote instead the one requirement or warning in the teacher's
+  instructions or handout that is easiest to miss and would cost points (showing every step,
+  units, a length or format rule, what must be turned in), e.g. 'The handout asks you to "show
+  all of your steps" for every calculation.' Never generic advice. If there is none, "". Quote
+  exactly; never invent or reword anything inside quotes.
 - effort: light (under 45 minutes), medium, or heavy (over 2 hours or more than one sitting).
 - Answer keys (listed in the prompt) are only for checking finished work. A step may say to check
   against the key by name; never put its answers, values or worked steps anywhere on the card.
@@ -104,10 +120,35 @@ class CardDraft(BaseModel):
 NOTES_MEDIA = ("paper", "doc")
 
 _NOTES_LINE = {
-    "paper": "on paper. Say 'on paper' or 'in your notebook'; never a doc or a file.",
-    "doc": "in a doc on the computer. Say 'in your notes doc'; never paper.",
-    None: "not set. Say 'your notes', not a doc or paper, unless the instructions say which.",
+    "paper": "on paper. Where writing first happens, say 'in your notebook' once; never a doc or a file.",
+    "doc": "in a doc on the computer. Where writing first happens, say 'in your notes doc' once; never paper.",
+    None: "not set. Don't say where to write (no 'in your notes', doc or paper) unless the instructions say; "
+    "just say what to write.",
 }
+
+# "in your notes", "to your notebook", "in your notes doc": where the student writes
+_PLACE = re.compile(r",?\s+(?:in|into|to|on) your (?:notes(?: doc)?|notebook)\b", re.I)
+_WRITES = re.compile(
+    r"^\W*(?:write|copy|jot|note|list|draw|record|answer|solve|do|redo|rework|work|make|label|sketch|"
+    r"paraphrase|summari[sz]e|outline|draft|fill|take|calculate|show|finish|complete|set up)\b",
+    re.I,
+)
+
+
+def _place_once(lines: list[str], allowed: int) -> list[str]:
+    """Keep "in your notes" (or notebook / notes doc) on at most `allowed` lines, and only on a line
+    that starts with writing and doesn't already name the notes ("from your notes in your notes")."""
+    out = []
+    for line in lines:
+        def keep(m: re.Match) -> str:
+            nonlocal allowed
+            rest = (line[: m.start()] + line[m.end():]).lower()
+            if allowed and _WRITES.match(line) and "your notes" not in rest and "your notebook" not in rest:
+                allowed -= 1
+                return m.group(0)
+            return ""
+        out.append(_PLACE.sub(keep, line))
+    return out
 
 
 def notes_medium(conn: sqlite3.Connection, course_id: int) -> str | None:
@@ -120,6 +161,24 @@ def set_notes_medium(conn: sqlite3.Connection, course_id: int, medium: str | Non
     if medium is not None and medium not in NOTES_MEDIA:
         raise ValueError(f"notes medium must be one of {NOTES_MEDIA} or null")
     db.kv_set(conn, f"notes_medium:{course_id}", medium)
+
+
+def mark_course_stale(conn: sqlite3.Connection, course_id: int, now: datetime) -> list[int]:
+    """After the course's notes setting changes: mark its upcoming cards stale so the next sync
+    rebuilds them once (build_all_missing). Returns the ids of the cards that will be rebuilt."""
+    due = {a.id for a in upcoming(db.list_assignments(conn), now, settings.card_horizon_days) if a.course_id == course_id}
+    rebuilt = []
+    for card in db.list_cards(conn):
+        if card.assignment_id in due:
+            if not card.stale:
+                db.save_card(conn, card.model_copy(update={"stale": True}))
+            rebuilt.append(card.assignment_id)
+    return rebuilt
+
+
+def has_writing(card: PrepCard) -> bool:
+    """Whether the card has the student write something (so it's worth asking where notes live)."""
+    return any(_WRITES.match(s) for s in [card.first_step, *card.steps])
 
 
 def decide_kind(assignment: Assignment, model_kind: AssignmentKind) -> AssignmentKind:
@@ -204,6 +263,19 @@ def is_answer_key(name: str) -> bool:
     return bool(_KEY_WORD.search(name) or _ANSWER_KEY.search(name))
 
 
+_PHRASE = re.compile(r"\b(?:here|is|are|provided|click|this|these|link|below|above|attached)\b", re.I)
+
+
+def _name_keys(lines: list[str], labels: list[str]) -> list[str]:
+    """Replace an answer key's link text, when it is a phrase ("KEY is provided here"), with what it
+    is: "check against the KEY is provided here" -> "check against the answer key"."""
+    phrases = sorted((l for l in labels if is_answer_key(l) and _PHRASE.search(l)), key=len, reverse=True)
+    for label in phrases:
+        pattern = re.compile(r"\b(?:the\s+)?" + re.escape(label), re.I)
+        lines = [pattern.sub("the answer key", line) for line in lines]
+    return lines
+
+
 def _prompt(
     assignment: Assignment,
     course_name: str,
@@ -215,13 +287,15 @@ def _prompt(
     plan: ReadingPlan | None = None,
     feedback: str = "(none)",
     read_names: list[str] | None = None,
+    unit: str = "",
 ) -> str:
     rubric = "\n".join(
         f"- {r.criterion} ({r.points_possible:g} pts)" if r.points_possible is not None else f"- {r.criterion}"
         for r in assignment.rubric
     )
-    link_lines = "\n".join(f"- {l.label}: {l.url}" for l in links) or "(none)"
-    blocked = "\n".join(f"- {l.label}" for l in unreadable or []) or "(none)"
+    key = lambda label: " [the answer key]" if is_answer_key(label) else ""
+    link_lines = "\n".join(f"- {l.label}{key(l.label)}: {l.url}" for l in links) or "(none)"
+    blocked = "\n".join(f"- {l.label}{key(l.label)}" for l in unreadable or []) or "(none)"
     if not text.strip() and not files:
         names = ", ".join(f"'{l.label}'" for l in unreadable or [])
         seen = (
@@ -259,6 +333,9 @@ Instructions available: {seen}
 
 {reading_plan}
 
+Unit materials for this test (use only if this is a test):
+{unit or "(none)"}
+
 Past feedback in this course (actionable criticism only; [kind] is the kind of work it came from):
 {feedback}
 
@@ -290,7 +367,7 @@ def _feedback_block(conn: sqlite3.Connection, assignment: Assignment) -> str:
 # ---- cards ------------------------------------------------------------------------------------
 
 _FALLBACK_FIRST_STEP: dict[str, str] = {
-    "lab": "Open the lab handout and copy its section headings to {where}.",
+    "lab": "Open the {name} handout and read step 1 of the procedure.",
     "reading": "Open the reading to its first page and read just the first two paragraphs.",
     "problem_set": "Open the problem set and copy problem 1 to {where}.",
     "essay": "Copy the essay prompt, word for word, to {where}.",
@@ -301,7 +378,7 @@ _FALLBACK_FIRST_STEP: dict[str, str] = {
 _WHERE = {
     "paper": "the top of a fresh page in your notebook, titled '{name}'",
     "doc": "a new doc titled '{name}'",
-    None: "the top of your notes for '{name}'",
+    None: "the top of a blank page",
 }
 
 _FALLBACK_STEPS: dict[str, list[str]] = {
@@ -358,11 +435,13 @@ def _reading_effort(plan: ReadingPlan) -> Effort:
     return "light" if plan.minutes < 45 else "medium"
 
 
-def _watch_out(conn: sqlite3.Connection, assignment: Assignment, kind: str, line: str, text: str) -> str:
-    """The model's line if its quotes check out against fitting evidence or the instructions,
-    else the student model's own line (which may be '')."""
+def _watch_out(
+    conn: sqlite3.Connection, assignment: Assignment, kind: str, line: str, text: str, handouts: list[str] = ()
+) -> str:
+    """The model's line if its quotes check out against fitting evidence, the instructions or the
+    files it read (a requirement easy to miss), else the student model's own line (which may be '')."""
     evidence = student_model.relevant_evidence(conn, assignment, kind, limit=20)
-    sources = [text] + [
+    sources = [text, *handouts] + [
         item[key] for item in evidence
         for key in ("text", "teacher_comment", "criterion", "teacher_note", "question")
         if item.get(key)
@@ -372,6 +451,20 @@ def _watch_out(conn: sqlite3.Connection, assignment: Assignment, kind: str, line
     if line:
         log.info("dropped watch-out for %s (quote not found in fitting feedback): %s", assignment.id, line)
     return student_model.watch_out_line(conn, assignment, kind)
+
+
+def _unit_outline(conn: sqlite3.Connection, assignment: Assignment) -> str:
+    """For a test (by its title guess or a Canvas quiz): the unit's documents and what's in each,
+    so the steps can name exact problems and slides. Answer keys keep only their title line."""
+    if assignment.kind != "test" and "online_quiz" not in assignment.submission_types:
+        return ""
+    try:
+        unit, docs = materials.unit_outline(conn, assignment)
+    except Exception as e:  # Canvas, Google or a file read failed: the card goes without the outline
+        log.warning("unit outline for %s failed: %s", assignment.id, e)
+        return ""
+    docs = [d.model_copy(update={"parts": []}) if d.answer_key else d for d in docs]
+    return materials.outline_text(unit, docs) if docs else ""
 
 
 def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
@@ -388,6 +481,7 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
             assignment, courses.get(assignment.course_id, ""), text, links, files, unreadable,
             notes=notes_medium(conn, assignment.course_id), plan=plan,
             feedback=_feedback_block(conn, assignment), read_names=[s.name for s in sources if s.read],
+            unit=_unit_outline(conn, assignment),
         ),
         CardDraft,
         files=files,
@@ -403,16 +497,23 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
         effort = _reading_effort(plan)
     else:
         plan = None
+    medium = notes_medium(conn, assignment.course_id)
+    says_notes = bool(re.search(r"\bnotes?\b|\bnotebook\b", text, re.I))
+    first_step, *steps = _place_once([draft.first_step, *steps], 1 if medium or says_notes else 0)
+    labels = [l.label for l in links] + [s.name for s in sources]
+    summary, first_step, *steps = _name_keys([draft.summary, first_step, *steps], labels)
+    same = lambda s: " ".join(s.lower().rstrip(". ").split())
+    steps = [s for s in steps if same(s) != same(first_step)] or steps  # the first step is shown above them
     allowed = {l.url for l in links}
     kept = [l for l in draft.links if l.url in allowed]
     return PrepCard(
         assignment_id=assignment.id,
         kind=kind,
-        summary=draft.summary,
-        first_step=draft.first_step,
+        summary=summary,
+        first_step=first_step,
         steps=steps,
         links=kept or links,
-        watch_out=_watch_out(conn, assignment, kind, draft.watch_out, text),
+        watch_out=_watch_out(conn, assignment, kind, draft.watch_out, text, [d.text for d in docs if d.readable]),
         effort=effort,
         generated_by="model",
         sources=sources,

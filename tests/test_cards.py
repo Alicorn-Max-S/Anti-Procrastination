@@ -245,6 +245,96 @@ def test_prompt_marks_answer_keys(conn):
     assert "Answer keys among them (for checking finished work only; copy nothing from them): KEY is provided here" in p
 
 
+# ---- wording: where to write, link text ---------------------------------------------------------
+
+
+def test_notes_are_named_once_and_only_where_writing_happens():
+    lines = [
+        "Watch the video straight through in your notes.",
+        "Copy problem 1 in your notes.",
+        "Rework examples from your notes in your notes.",
+        "Write the answer in your notes.",
+    ]
+    assert prep._place_once(lines, 0) == [
+        "Watch the video straight through.", "Copy problem 1.", "Rework examples from your notes.", "Write the answer.",
+    ]
+    assert prep._place_once(lines, 1)[1:] == [
+        "Copy problem 1 in your notes.", "Rework examples from your notes.", "Write the answer.",
+    ]
+
+
+def test_neutral_notes_setting_names_no_place(conn, model):
+    replies, prompts = model
+    a = Assignment(id=62, course_id=9, name="Vectors HW", kind="problem_set", description_html="<p>Do 1-10.</p>")
+    replies.append(draft(first_step="Write out problem 1 in your notes.", steps=["Do 1-5 in your notes", "Check 1-5 in your notes", "c"]))
+    card = prep.build_prep_card(conn, a)
+    assert "your notes" not in " ".join([card.first_step, *card.steps])
+    assert "Don't say where to write" in prompts[0]
+    prep.set_notes_medium(conn, 9, "paper")
+    replies.append(draft(first_step="Write out problem 1 in your notebook.", steps=["Do 1-5 in your notebook", "c", "d"]))
+    card = prep.build_prep_card(conn, a)
+    assert card.first_step == "Write out problem 1 in your notebook." and card.steps[0] == "Do 1-5"
+    replies.append(draft(first_step="Open the video.", steps=["Open the video", "Draw the diagram", "c"]))
+    assert prep.build_prep_card(conn, a).steps == ["Draw the diagram", "c"]  # no repeat of the first step
+
+
+def test_answer_key_link_text_becomes_the_answer_key(conn, model, monkeypatch):
+    from app.models import SourceFile
+
+    replies, prompts = model
+    url = "https://drive.google.com/file/d/k/view"
+    key = SourceFile(name="KEY is provided here", url=url, read=False, reason="shared only inside the school")
+    monkeypatch.setattr(prep, "_attachments", lambda a: ([], [key], []))
+    a = Assignment(id=63, course_id=1, name="Derivative Problems", kind="problem_set",
+                   description_html=f'<p>Finish the problems. <a href="{url}">KEY is provided here</a></p>')
+    replies.append(draft(steps=["Check each finished problem against the KEY is provided here.", "b", "c"]))
+    card = prep.build_prep_card(conn, a)
+    assert card.steps[0] == "Check each finished problem against the answer key."
+    assert "KEY is provided here [the answer key]" in prompts[0]
+    titled = ["Check against Test Review: Vectors KEY."]
+    assert prep._name_keys(titled, ["Test Review: Vectors KEY"]) == titled  # a real title stays
+
+
+def test_test_card_prompt_gets_the_unit_outline_without_key_contents(conn, model, monkeypatch):
+    from app import materials, practice
+
+    replies, prompts = model
+    unit = materials.Unit(name="Unit 2: Vectors", from_module=True, items=[])
+    docs = [
+        materials.DocOutline(title="Test Review: Vectors", url="", kind="assignment", answer_key=False, readable=True,
+                             parts=[materials.Part(label="problem 10", text="On a train moving 75 m/s")]),
+        materials.DocOutline(title="Test Review: Vectors KEY", url="", kind="file", answer_key=True, readable=True,
+                             parts=[materials.Part(label="problem 10", text="75 + 5 = 80 m/s")]),
+    ]
+    monkeypatch.setattr(materials, "unit_outline", lambda conn, a: (unit, docs))
+    monkeypatch.setattr(practice, "add_practice", lambda conn, a, card: card)
+    test = Assignment(id=65, course_id=1, name="Test #2: Vectors", kind="test", description_html="<p>In class.</p>")
+    replies.append(draft(kind="test"))
+    prep.build_prep_card(conn, test)
+    assert "problem 10: On a train moving 75 m/s" in prompts[0] and "Test Review: Vectors KEY" in prompts[0]
+    assert "80 m/s" not in prompts[0]  # a key's answers never reach the prompt
+    homework = Assignment(id=66, course_id=1, name="Vectors HW", kind="problem_set", description_html="<p>Do 1-5.</p>")
+    replies.append(draft())
+    prep.build_prep_card(conn, homework)
+    assert "Unit materials for this test (use only if this is a test):\n(none)" in prompts[1]
+
+
+def test_watch_out_may_quote_an_easy_to_miss_rule_from_the_handout(conn, model, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.models import SourceFile
+
+    replies, _ = model
+    handout = SimpleNamespace(name="Lab Handout", readable=True, book_pages=[],
+                              text="Procedure\nShow all of your steps for every calculation.")
+    monkeypatch.setattr(prep, "_attachments", lambda a: ([], [SourceFile(name="Lab Handout")], [handout]))
+    lab = Assignment(id=64, course_id=1, name="Lab: Force Table", kind="lab", description_html="<p>See the handout.</p>")
+    replies.append(draft(kind="lab", watch_out='The handout asks you to "show all of your steps" for every calculation.'))
+    assert "show all of your steps" in prep.build_prep_card(conn, lab).watch_out
+    replies.append(draft(kind="lab", watch_out='The handout says "label every axis".'))  # not in the handout
+    assert prep.build_prep_card(conn, lab).watch_out == ""
+
+
 # ---- undo "Mark done" --------------------------------------------------------------------------
 
 
@@ -290,6 +380,10 @@ def test_undo_done_through_the_api(conn):
         client.post("/api/clock", json={"action": "set", "when": (first.end + timedelta(hours=1)).isoformat()})
         assert card()["next_block"] != first.start.isoformat()  # over: not "Planned for" its start any more
 
+        assert not card()["stale"] and isinstance(card()["writes"], bool)
         r = client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "paper"})
         assert r.status_code == 200 and card()["notes_medium"] == "paper"
+        assert 9000204 in r.json()["stale"] and card()["stale"]  # rebuilt on the next sync
+        again = client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "paper"})
+        assert again.json()["stale"] == []  # no change, nothing to rebuild
         assert client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "slate"}).status_code == 422

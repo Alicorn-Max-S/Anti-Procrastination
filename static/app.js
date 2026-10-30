@@ -500,10 +500,19 @@ function renderCards() {
     );
     return;
   }
-  root.replaceChildren(...cards.map(renderCard));
+  // Ask where notes live once per course: on its first open card that has the student write.
+  const asking = new Set();
+  const askedCourses = new Set();
+  for (const c of cards) {
+    if (c.done || !c.writes || c.notes_medium || !c.course_id || askedCourses.has(c.course_id)) continue;
+    if (store.get(`notesAskSkipped:${c.course_id}`, false)) continue;
+    askedCourses.add(c.course_id);
+    asking.add(c.assignment_id);
+  }
+  root.replaceChildren(...cards.map((c) => renderCard(c, asking.has(c.assignment_id))));
 }
 
-function renderCard(c) {
+function renderCard(c, askNotes = false) {
   const card = el("article", `card${c.done ? " done" : ""}`);
   card.id = `card-${c.assignment_id}`;
 
@@ -578,11 +587,12 @@ function renderCard(c) {
     card.append(links);
   }
   if (c.sources && c.sources.length) card.append(renderSources(c.sources));
+  if (askNotes) card.append(notesAsk(c));
+  if (c.stale) card.append(el("p", "muted small", "This card will be rebuilt on the next sync."));
 
   const foot = el("div", "card-foot");
   foot.append(el("span", "badge", `${c.effort} effort`));
   if (c.generated_by !== "model") foot.append(el("span", "badge", c.generated_by === "demo" ? "demo card" : "template card"));
-  foot.append(notesPicker(c));
   foot.append(el("span", "spacer"));
   const regen = button("Regenerate", "ghost", async () => {
     regen.disabled = true;
@@ -660,30 +670,74 @@ function renderSources(sources) {
   return box;
 }
 
-// Per-course setting: notes on paper / in a doc. Used by cards built (or regenerated) after it changes.
-function notesPicker(c) {
-  const select = el("select", "notes-medium");
-  select.setAttribute("aria-label", `Where you keep notes for ${c.course || "this course"}`);
-  [["", "Notes: not set"], ["paper", "Notes on paper"], ["doc", "Notes in a doc"]].forEach(([value, text]) => {
-    const o = el("option", null, text);
-    o.value = value;
-    select.append(o);
-  });
-  select.value = c.notes_medium || "";
-  select.title = "Where you keep notes for this course. Regenerate a card to use it.";
-  select.addEventListener("change", async () => {
-    try {
-      await api(`/api/courses/${c.course_id}/notes`, { method: "PUT", body: JSON.stringify({ medium: select.value || null }) });
-      cards.forEach((other) => {
-        if (other.course_id === c.course_id) other.notes_medium = select.value || null;
-      });
+// ---- where each course's notes live -----------------------------------------------------------
+
+// Save it; the server marks that course's upcoming cards stale, so the next sync rebuilds them.
+async function setNotes(courseId, courseName, medium) {
+  try {
+    const r = await api(`/api/courses/${courseId}/notes`, { method: "PUT", body: JSON.stringify({ medium }) });
+    cards.forEach((c) => {
+      if (c.course_id !== courseId) return;
+      c.notes_medium = medium;
+      if (r.stale.includes(c.assignment_id)) c.stale = true;
+    });
+    courses.forEach((c) => {
+      if (c.id === courseId) c.notes_medium = medium;
+    });
+    renderCards();
+    renderNotesSettings();
+    const n = r.stale.length;
+    toast(n ? `Saved. ${n} ${courseName} card${n === 1 ? "" : "s"} will update on the next sync.` : `Saved for ${courseName}.`);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+// "Do you keep US History notes on paper or in a doc?", once per course, on a card with writing steps.
+function notesAsk(c) {
+  const box = el("div", "notes-ask");
+  box.append(el("p", null, `Do you keep ${c.course || "this course's"} notes on paper or in a doc?`));
+  const actions = el("div", "actions");
+  actions.append(
+    button("On paper", "ghost", () => setNotes(c.course_id, c.course, "paper")),
+    button("In a doc", "ghost", () => setNotes(c.course_id, c.course, "doc")),
+    button("Not now", "ghost", () => {
+      store.set(`notesAskSkipped:${c.course_id}`, true);
       renderCards();
-      toast(`Saved for ${c.course || "this course"}. Regenerate a card to use it.`);
-    } catch (e) {
-      toast(e.message);
-    }
-  });
-  return select;
+    }),
+  );
+  box.append(actions);
+  return box;
+}
+
+// Dashboard: one choice per course that has cards (or already has a setting).
+function renderNotesSettings() {
+  const root = $("#notes-settings");
+  if (!root) return;
+  const withCards = new Set(cards.map((c) => c.course_id));
+  const list = courses.filter((c) => withCards.has(c.id) || c.notes_medium);
+  if (!list.length) {
+    root.replaceChildren(el("p", "empty", "No courses with cards yet. Sync with Canvas first."));
+    return;
+  }
+  root.replaceChildren(
+    ...list.map((course) => {
+      const row = el("div", "notes-row");
+      const select = el("select", null);
+      select.id = `notes-${course.id}`;
+      [["", "Not set"], ["paper", "On paper"], ["doc", "In a doc"]].forEach(([value, text]) => {
+        const o = el("option", null, text);
+        o.value = value;
+        select.append(o);
+      });
+      select.value = course.notes_medium || "";
+      select.addEventListener("change", () => setNotes(course.id, course.name, select.value || null));
+      const name = el("label", null, course.name);
+      name.htmlFor = select.id;
+      row.append(name, select);
+      return row;
+    }),
+  );
 }
 
 function renderPractice(c) {
@@ -765,6 +819,7 @@ async function loadCourses() {
 
 async function loadDashboard() {
   if (!courses.length) await loadCourses();
+  renderNotesSettings();
   const id = $("#course-select").value;
   if (!id) {
     $("#grid").replaceChildren(el("p", "empty", "No courses yet. Sync with Canvas first."));
