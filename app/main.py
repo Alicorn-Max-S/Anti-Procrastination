@@ -15,12 +15,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import checkin, db, grader, loop, meta_client, prep, push, scheduler, student_model
+from app import browser_files, checkin, db, grader, loop, meta_client, prep, push, scheduler, student_model
 from app.clock import clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
@@ -441,6 +441,69 @@ def update_row(row_id: int, row: TestRow, conn=Depends(get_conn)) -> dict:
 def delete_row(row_id: int, conn=Depends(get_conn)) -> dict:
     db.delete_test_row(conn, row_id)
     return {"ok": True}
+
+
+# ---- Chrome extension (extension/) ------------------------------------------------------------
+# The extension fetches school-only Google files in the student's signed-in Chrome and posts them
+# here (browser_files.py). Every call carries the key from `python -m app.browser_files key`.
+
+
+def extension_conn(x_start_helper_key: str | None = Header(None), conn=Depends(get_conn)):
+    """The request's connection, once the extension's key checks out."""
+    if not browser_files.key_ok(conn, x_start_helper_key):
+        raise HTTPException(401, "Wrong or missing key: run `python -m app.browser_files key` and paste it into the extension")
+    return conn
+
+
+@app.get("/api/ext/hello")
+def extension_hello(conn=Depends(extension_conn)) -> dict:
+    """For the extension's options page: the key works, and which Canvas site to watch."""
+    return {"ok": True, "canvas_url": settings.canvas_base_url, "max_bytes": browser_files.MAX_BYTES}
+
+
+@app.get("/api/ext/needed")
+def extension_needed(conn=Depends(extension_conn)) -> dict:
+    return browser_files.needed(conn, clock.now())
+
+
+class OpenedIn(BaseModel):
+    url: str
+    opener_url: str = ""  # the Canvas page the doc was opened from, when the extension can see it
+
+
+@app.post("/api/ext/opened")
+def extension_opened(body: OpenedIn, conn=Depends(extension_conn)) -> dict:
+    """The student opened a Google doc: should the extension save it?"""
+    return browser_files.opened(conn, body.url, body.opener_url, clock.now())
+
+
+@app.post("/api/ext/files")
+def extension_upload(
+    url: str = Form(...),
+    title: str = Form(""),
+    assignment_id: int | None = Form(None),
+    file: UploadFile = File(...),
+    conn=Depends(extension_conn),
+) -> dict:
+    data = file.file.read(browser_files.MAX_BYTES + 1)
+    try:
+        return browser_files.save_upload(conn, url, data, file.filename or "", title, assignment_id, clock.now())
+    except browser_files.UploadError as e:
+        raise HTTPException(422, str(e))
+
+
+class FailedIn(BaseModel):
+    url: str
+    reason: str  # a browser_files.REASONS key
+    detail: str = ""
+
+
+@app.post("/api/ext/failed")
+def extension_failed(body: FailedIn, conn=Depends(extension_conn)) -> dict:
+    try:
+        return browser_files.save_failure(conn, body.url, body.reason, body.detail, clock.now())
+    except browser_files.UploadError as e:
+        raise HTTPException(422, str(e))
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
