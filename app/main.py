@@ -26,7 +26,7 @@ from app import browser_files, checkin, db, grader, loop, meta_client, prep, pus
 from app.clock import clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
-from app.models import Block, Ping, TestRow
+from app.models import Block, GradedTest, Ping, TestRow
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 TICK_SECONDS = 15  # the longest the background loop sleeps between ticks
@@ -597,7 +597,13 @@ def dashboard(course_id: int, conn=Depends(get_conn)) -> dict:
         "weakest": student_model.weakest_cells(conn, course_id, n=3),
         "evidence": student_model.feedback_evidence(conn, course_id, limit=8),
         "rows": [r.model_dump() for r in db.list_test_rows(conn, course_id)],
+        # this course's graded tests, plus any the upload couldn't file under a course yet
+        "tests": [_test_view(t) for t in db.list_graded_tests(conn, course_id) + db.list_graded_tests(conn, 0)],
     }
+
+
+def _test_view(t: GradedTest) -> dict:
+    return {**t.model_dump(mode="json"), "percent": t.percent, "needs_review": t.needs_review}
 
 
 @app.get("/api/stats")
@@ -615,23 +621,50 @@ def stats(conn=Depends(get_conn)) -> dict:
 
 
 @app.post("/api/tests/upload")
-def upload_test(course_id: int = Form(...), file: UploadFile = File(...), conn=Depends(get_conn)) -> dict:
-    """Save a graded-test photo (or PDF scan) and extract one row per question."""
+def upload_test(
+    file: UploadFile = File(...), course_id: int | None = Form(None), conn=Depends(get_conn)
+) -> dict:
+    """Save a graded-test photo (or PDF scan) and read it: score, sections and one row per question.
+    Without `course_id` it is filed under the course the test itself points to."""
     name = Path(file.filename or "photo.jpg").name
     if Path(name).suffix.lower() not in meta_client.MIME:
         raise HTTPException(400, "Upload a JPG, PNG, WEBP or PDF")
     if not meta_client.configured():
         raise HTTPException(503, "Set META_API_KEY in .env to read test photos")
-    folder = Path(settings.files_dir) / "tests" / str(course_id)
+    if course_id is not None and course_id not in {c.id for c in db.list_courses(conn)}:
+        raise HTTPException(404, "No such course")
+    folder = Path(settings.files_dir) / "tests"
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{clock.real_now():%Y%m%d-%H%M%S}-{re.sub(r'[^\w.\-]', '_', name)}"
     path.write_bytes(file.file.read())
     try:
-        rows = grader.extract_rows(path, course_id, conn)
+        test, rows, used = grader.read_test(conn, path, course_id)
     except MetaError as e:
         raise HTTPException(502, str(e))
-    ids = db.save_test_rows(conn, rows)
-    return {"saved": len(ids), "rows": [r.model_copy(update={"id": i}).model_dump() for r, i in zip(rows, ids)]}
+    test = grader.save(conn, test, rows, used)
+    saved = [r for r in db.list_test_rows(conn, test.course_id) if r.test_id == test.id]
+    return {"saved": len(saved), "test": _test_view(test), "rows": [r.model_dump() for r in saved]}
+
+
+class MoveTest(BaseModel):
+    course_id: int
+
+
+@app.put("/api/tests/{test_id}/course")
+def move_test(test_id: int, body: MoveTest, conn=Depends(get_conn)) -> dict:
+    """File a graded test (and its rows) under another course."""
+    if body.course_id not in {c.id for c in db.list_courses(conn)}:
+        raise HTTPException(404, "No such course")
+    test = grader.move(conn, test_id, body.course_id)
+    if test is None:
+        raise HTTPException(404, "No such test")
+    return _test_view(test)
+
+
+@app.delete("/api/tests/{test_id}")
+def delete_test(test_id: int, conn=Depends(get_conn)) -> dict:
+    db.delete_graded_test(conn, test_id)
+    return {"ok": True}
 
 
 @app.put("/api/tests/rows/{row_id}")

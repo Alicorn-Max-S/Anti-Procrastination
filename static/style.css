@@ -366,3 +366,18 @@ td.cell.hot small { color: rgba(255, 255, 255, 0.8); }
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
   z-index: 30; /* above the missed-start modal */
 }
+
+/* Graded tests on the dashboard: score as written, sections, and what doesn't add up. */
+.graded-tests { display: grid; gap: 0.6rem; margin: 0.8rem 0; }
+.graded-test { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 0.8rem; background: var(--surface); }
+.graded-test.review { border-color: var(--warn); }
+.graded-head { display: flex; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; align-items: baseline; }
+.graded-score { font-weight: 600; }
+.graded-where { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.2rem; }
+.graded-where select { font-size: 0.85rem; }
+.graded-sections { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.15rem; }
+.graded-sections li { display: flex; justify-content: space-between; gap: 0.6rem; font-size: 0.92rem; }
+.graded-sections .lost { color: var(--accent); font-weight: 600; }
+.graded-sections .full { color: var(--ok); font-weight: 600; }
+.graded-review { margin-top: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 0.9rem; }
+.graded-review ul { margin: 0.2rem 0 0; padding-left: 1.1rem; }

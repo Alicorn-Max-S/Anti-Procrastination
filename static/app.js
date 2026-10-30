@@ -834,6 +834,98 @@ async function loadCourses() {
     }),
   );
   if (saved && courses.some((c) => String(c.id) === String(saved))) sel.value = saved;
+  const up = $("#upload-course");
+  up.replaceChildren(up.options[0], ...courses.map((c) => {
+    const o = el("option", null, c.name);
+    o.value = c.id;
+    return o;
+  }));
+}
+
+const courseName = (id) => courses.find((c) => c.id === id)?.name;
+const num = (x) => (x == null ? "?" : String(Math.round(x * 100) / 100));
+
+// One line for a graded test's score: "82.5% (80.5/100 + 2 bonus)".
+function scoreText(t) {
+  const parts = [];
+  if (t.score != null) parts.push(t.score_possible === 100 ? `${num(t.score)}%` : `${num(t.score)}/${num(t.score_possible)}`);
+  if (t.earned != null && t.possible) parts.push(`(${num(t.earned)}/${num(t.possible)}${t.bonus ? ` + ${num(t.bonus)} bonus` : ""})`);
+  return parts.join(" ") || "no score read";
+}
+
+// A select that files a test under another course; the first option says where it is now.
+function moveControl(t) {
+  const sel = el("select");
+  sel.setAttribute("aria-label", "Move this test to another course");
+  const here = el("option", null, t.course_id ? "Move to…" : "Pick its course…");
+  here.value = "";
+  sel.append(here, ...courses.filter((c) => c.id !== t.course_id).map((c) => {
+    const o = el("option", null, c.name);
+    o.value = c.id;
+    return o;
+  }));
+  sel.addEventListener("change", async () => {
+    if (!sel.value) return;
+    try {
+      await api(`/api/tests/${t.id}/course`, { method: "PUT", body: JSON.stringify({ course_id: Number(sel.value) }) });
+      toast(`Moved to ${courseName(Number(sel.value))}`);
+      loadDashboard();
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  return sel;
+}
+
+function testBox(t) {
+  const box = el("div", `graded-test${t.needs_review ? " review" : ""}`);
+  const head = el("div", "graded-head");
+  head.append(el("strong", null, t.title || t.source), el("span", "graded-score", scoreText(t)));
+  box.append(head);
+  const where = el("div", "muted small graded-where");
+  const filed = courseName(t.course_id);
+  const detected = courseName(t.detected_course_id);
+  where.append(document.createTextNode(
+    filed
+      ? `${filed}${t.detected_course_id === t.course_id ? " (detected from the test)" : detected ? ` (the test looks like ${detected})` : ""} · `
+      : "Couldn't tell which course this is from · ",
+  ));
+  where.append(moveControl(t), button("Delete", "ghost small", async () => {
+    if (!confirm("Delete this test and its questions?")) return;
+    try {
+      await api(`/api/tests/${t.id}`, { method: "DELETE" });
+      loadDashboard();
+    } catch (e) {
+      toast(e.message);
+    }
+  }));
+  box.append(where);
+  const ul = el("ul", "graded-sections");
+  t.sections.forEach((s) => {
+    const score = s.bonus
+      ? (s.earned != null ? `+${num(s.earned)} bonus` : "bonus")
+      : `${num(s.earned)}/${num(s.possible)}${s.written ? "" : " (added up)"}`;
+    const li = el("li");
+    li.append(el("span", null, s.name), el("span", s.bonus ? "muted" : s.earned < s.possible ? "lost" : "full", score));
+    if (s.questions) li.title = `${s.questions} questions, ${s.wrong} marked wrong · ${label(s.qtype)}`;
+    ul.append(li);
+  });
+  box.append(ul);
+  if (t.needs_review) {
+    const warn = el("div", "graded-review");
+    warn.append(el("strong", null, "Doesn't add up, check it: "));
+    const list = el("ul");
+    t.mismatches.forEach((m) => list.append(el("li", null, m)));
+    warn.append(list);
+    box.append(warn);
+  }
+  t.notes.forEach((n) => box.append(el("div", "muted small", n)));
+  return box;
+}
+
+function renderTests(tests) {
+  const root = $("#tests");
+  root.replaceChildren(...tests.slice().reverse().map(testBox));
 }
 
 async function loadDashboard() {
@@ -848,6 +940,7 @@ async function loadDashboard() {
     const [d, s] = await Promise.all([api(`/api/dashboard?course_id=${id}`), api("/api/stats")]);
     renderGrid(d.grid);
     renderWeakest(d.weakest);
+    renderTests(d.tests);
     renderRows(d.rows);
     renderEvidence(d.evidence);
     renderStats(s);
@@ -875,7 +968,7 @@ function renderGrid(grid) {
       const td = el("td", "cell");
       if (c) {
         const pct = Math.round(c.fraction * 100);
-        td.append(document.createTextNode(`${pct}% lost`), el("small", null, `${c.lost}/${c.possible} marks · ${c.count} q`));
+        td.append(document.createTextNode(`${pct}% lost`), el("small", null, `${num(c.lost)}/${num(c.possible)} marks · ${c.count} q`));
         td.style.background = `color-mix(in srgb, var(--accent) ${Math.max(6, pct)}%, transparent)`;
         if (pct >= 50) td.classList.add("hot");
       } else td.textContent = "–";
@@ -904,12 +997,17 @@ function renderRows(rows) {
   if (!rows.length) return root.replaceChildren();
   const table = el("table");
   const head = el("tr");
-  ["Test", "Question", "Answer", "Marks", "Teacher note", "Topic", "Type", ""].forEach((h) => head.append(el("th", null, h)));
+  ["Section", "Question", "Answer", "Marks", "Teacher note", "Topic", "Type", ""].forEach((h) => head.append(el("th", null, h)));
   table.append(head);
   rows.forEach((r) => {
     const tr = el("tr");
-    const marks = r.marks_possible != null ? `${r.marks ?? "?"}/${r.marks_possible}` : "–";
-    [r.source, r.question, r.student_answer, marks, r.teacher_note, label(r.topic), label(r.qtype)].forEach((v) => tr.append(el("td", null, v ?? "")));
+    const mark = r.correct === true ? "✓ " : r.correct === false ? "✗ " : "";
+    const marks = r.bonus
+      ? `${mark}bonus`
+      : r.marks_possible != null
+        ? `${mark}${r.estimated ? "≈" : ""}${num(r.marks)}/${num(r.marks_possible)}`
+        : `${mark}–`;
+    [r.section || r.source, r.question, r.student_answer, marks, r.teacher_note, label(r.topic), label(r.qtype)].forEach((v) => tr.append(el("td", null, v ?? "")));
     const td = el("td");
     td.append(
       button("Delete", "ghost", async () => {
@@ -925,7 +1023,7 @@ function renderRows(rows) {
     tr.append(td);
     table.append(tr);
   });
-  root.replaceChildren(el("p", "muted small", "Fix a misread row at /docs (PUT /api/tests/rows/{id}) or delete it here."), table);
+  root.replaceChildren(el("p", "muted small", "≈ marks are the section's lost points split across the questions marked wrong. Fix a misread row at /docs (PUT /api/tests/rows/{id}) or delete it here."), table);
 }
 
 function renderEvidence(items) {
@@ -965,17 +1063,25 @@ $("#course-select").addEventListener("change", (e) => {
 $("#upload-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const file = $("#upload-file").files[0];
-  const courseId = $("#course-select").value;
-  if (!file || !courseId) return toast("Pick a course and a photo");
+  const courseId = $("#upload-course").value;
+  if (!file) return toast("Pick a photo or scan");
   const form = new FormData();
-  form.append("course_id", courseId);
+  if (courseId) form.append("course_id", courseId);
   form.append("file", file);
   const status = $("#upload-status");
-  status.textContent = "Reading the photo… this takes a little while.";
+  status.textContent = "Reading it page by page… this takes a little while.";
   try {
     const r = await api("/api/tests/upload", { method: "POST", body: form });
-    status.textContent = `Saved ${r.saved} question${r.saved === 1 ? "" : "s"}.`;
+    const t = r.test;
+    const where = courseName(t.course_id);
+    status.textContent = `${scoreText(t)} · ${r.saved} question${r.saved === 1 ? "" : "s"}${
+      where ? ` · ${courseId ? "filed under" : "detected:"} ${where}` : " · couldn't tell the course, pick it below"
+    }${t.needs_review ? " · doesn't add up, check it below" : ""}`;
     $("#upload-form").reset();
+    if (t.course_id && String(t.course_id) !== $("#course-select").value) {
+      $("#course-select").value = t.course_id;
+      store.set("course", String(t.course_id));
+    }
     loadDashboard();
   } catch (err) {
     status.textContent = err.message;

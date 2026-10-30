@@ -94,12 +94,16 @@
 
         <div class="panel">
           <h3>Add a graded test</h3>
-          <p class="muted small">A photo of a marked quiz or test. Each question becomes a row below. Cover other students' names first.</p>
+          <p class="muted small">A photo or scan of a marked quiz or test. It reads the score, each section's subtotal and every question, and checks that they add up. Cover other students' names first.</p>
           <form id="upload-form" class="row wrap">
             <input id="upload-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" required />
+            <select id="upload-course" aria-label="Course for this test">
+              <option value="">Course: detect from the test</option>
+            </select>
             <button type="submit" class="primary">Read it</button>
             <span id="upload-status" class="muted small"></span>
           </form>
+          <div id="tests" class="graded-tests"></div>
           <div id="rows" class="table-wrap"></div>
         </div>
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
-from app.models import Assignment, Block, Course, Ping, PrepCard, TestRow
+from app.models import Assignment, Block, Course, GradedTest, Ping, PrepCard, TestRow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS courses (
@@ -48,7 +48,15 @@ CREATE TABLE IF NOT EXISTS test_rows (   -- filled by grader.py: one row per gra
     course_id INTEGER NOT NULL,
     source TEXT NOT NULL,
     question TEXT, student_answer TEXT, marks REAL, marks_possible REAL,
-    teacher_note TEXT, topic TEXT, qtype TEXT
+    teacher_note TEXT, topic TEXT, qtype TEXT,
+    test_id INTEGER, section TEXT, correct INTEGER,
+    bonus INTEGER NOT NULL DEFAULT 0, estimated INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS graded_tests (  -- filled by grader.py: one per uploaded test
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,   -- 0 until filed under a course
+    sha TEXT,
+    data TEXT NOT NULL            -- GradedTest as JSON
 );
 CREATE TABLE IF NOT EXISTS push_subscriptions (
     endpoint TEXT PRIMARY KEY,
@@ -64,6 +72,11 @@ CREATE TABLE IF NOT EXISTS kv (       -- small app state: last sync time, clock 
 # init_db adds any that an older data/app.db is missing.
 LATER_COLUMNS = [
     ("blocks", "at_risk", "INTEGER NOT NULL DEFAULT 0"),
+    ("test_rows", "test_id", "INTEGER"),
+    ("test_rows", "section", "TEXT"),
+    ("test_rows", "correct", "INTEGER"),
+    ("test_rows", "bonus", "INTEGER NOT NULL DEFAULT 0"),
+    ("test_rows", "estimated", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -222,7 +235,7 @@ def list_pings(conn: sqlite3.Connection) -> list[Ping]:
 
 _ROW_FIELDS = (
     "course_id", "source", "question", "student_answer", "marks", "marks_possible",
-    "teacher_note", "topic", "qtype",
+    "teacher_note", "topic", "qtype", "test_id", "section", "correct", "bonus", "estimated",
 )
 
 
@@ -259,6 +272,52 @@ def list_test_rows(conn: sqlite3.Connection, course_id: int | None = None) -> li
         args = (course_id,)
     rows = conn.execute(sql + " ORDER BY id", args).fetchall()
     return [TestRow.model_validate({k: v for k, v in dict(r).items() if v is not None}) for r in rows]
+
+
+def save_graded_test(conn: sqlite3.Connection, t: GradedTest) -> int:
+    """Insert (no id) or replace a graded test; returns its id."""
+    if t.id is None:
+        cur = conn.execute("INSERT INTO graded_tests (course_id, sha, data) VALUES (?, ?, '{}')", (t.course_id, t.sha))
+        t = t.model_copy(update={"id": int(cur.lastrowid)})
+    conn.execute(
+        "UPDATE graded_tests SET course_id = ?, sha = ?, data = ? WHERE id = ?",
+        (t.course_id, t.sha, t.model_dump_json(), t.id),
+    )
+    conn.commit()
+    return t.id
+
+
+def get_graded_test(conn: sqlite3.Connection, test_id: int) -> GradedTest | None:
+    row = conn.execute("SELECT data FROM graded_tests WHERE id = ?", (test_id,)).fetchone()
+    return GradedTest.model_validate_json(row["data"]) if row else None
+
+
+def list_graded_tests(conn: sqlite3.Connection, course_id: int | None = None) -> list[GradedTest]:
+    sql = "SELECT data FROM graded_tests"
+    args: tuple = ()
+    if course_id is not None:
+        sql += " WHERE course_id = ?"
+        args = (course_id,)
+    return [GradedTest.model_validate_json(r["data"]) for r in conn.execute(sql + " ORDER BY id", args)]
+
+
+def delete_graded_test(conn: sqlite3.Connection, test_id: int) -> None:
+    """The test and every row read from it."""
+    conn.execute("DELETE FROM test_rows WHERE test_id = ?", (test_id,))
+    conn.execute("DELETE FROM graded_tests WHERE id = ?", (test_id,))
+    conn.commit()
+
+
+def move_graded_test(conn: sqlite3.Connection, test_id: int, course_id: int) -> GradedTest | None:
+    """File a test (and its rows) under another course."""
+    t = get_graded_test(conn, test_id)
+    if t is None:
+        return None
+    t = t.model_copy(update={"course_id": course_id})
+    save_graded_test(conn, t)
+    conn.execute("UPDATE test_rows SET course_id = ? WHERE test_id = ?", (course_id, test_id))
+    conn.commit()
+    return t
 
 
 # ---- push subscriptions -----------------------------------------------------------------------

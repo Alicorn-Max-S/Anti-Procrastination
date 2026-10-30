@@ -178,3 +178,61 @@ class TestRow(BaseModel):
     teacher_note: str = ""
     topic: str = ""
     qtype: str = ""
+    test_id: int | None = None  # the GradedTest it came from (rows saved before tests had records: None)
+    section: str = ""  # that test's section name
+    correct: bool | None = None  # None when the teacher's marks don't say
+    bonus: bool = False  # bonus questions never count as lost marks (marks stay None)
+    estimated: bool = False  # marks split from the section subtotal, not written at the question
+
+
+class TestSection(BaseModel):
+    """One section of a graded test: its instructions, question type and the teacher's subtotal."""
+
+    __test__ = False
+
+    name: str
+    instructions: str = ""
+    qtype: str = ""
+    topic: str = ""
+    earned: float | None = None
+    possible: float | None = None
+    written: bool = False  # the teacher wrote this subtotal (else it is added up from the questions)
+    bonus: bool = False
+    questions: int = 0
+    wrong: int = 0
+    page: int = 1
+
+
+class GradedTest(BaseModel):
+    """A graded test as a whole: score as written, sections, bonus, and whether it adds up."""
+
+    __test__ = False
+
+    id: int | None = None
+    course_id: int  # 0 until it is filed under a course
+    detected_course_id: int = 0  # the course the test itself points to; 0 when it couldn't tell
+    source: str  # saved filename
+    sha: str = ""  # of the uploaded file, so a re-upload replaces the old reading
+    title: str = ""
+    subject: str = ""
+    pages: int = 1
+    score: float | None = None  # final score as written, bonus included (82.5)
+    score_possible: float | None = None  # what the score is out of (100 for a percent)
+    score_written: str = ""  # e.g. "80.5 + 2 = 82.5%"
+    earned: float | None = None  # sections added up, without bonus
+    possible: float | None = None
+    bonus: float = 0.0
+    sections: list[TestSection] = Field(default_factory=list)
+    mismatches: list[str] = Field(default_factory=list)  # anything that didn't add up: needs review
+    notes: list[str] = Field(default_factory=list)  # what couldn't be checked
+    created_at: datetime | None = None
+
+    @property
+    def needs_review(self) -> bool:
+        return bool(self.mismatches)
+
+    @property
+    def percent(self) -> float | None:
+        if self.score is None or not self.score_possible:
+            return None
+        return round(self.score / self.score_possible * 100, 1)
