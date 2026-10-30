@@ -103,7 +103,7 @@ def test_test_card_gets_practice_aimed_at_weak_spots(conn, model):
     replies.append(practice.Solved(answers=["era", "era", "era"]))
     card = prep.build_prep_card(conn, quiz)
     assert len(card.practice) == 3 and all(p.verified for p in card.practice)
-    assert card.first_step.startswith("Answer practice question 1")
+    assert card.first_step.startswith("Read practice question 1")
     assert "pret_imp / fill_in_blank" in prompts[1][0]
 
 

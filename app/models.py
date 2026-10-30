@@ -78,6 +78,8 @@ class PracticeQuestion(BaseModel):
     answer: str
     explanation: str = ""
     verified: bool = False  # True when an independent second solve agreed with `answer`
+    source: str = ""  # the unit document it's based on, e.g. "Presentation: Vectors (Part 1), p. 4"
+    source_url: str = ""
 
 
 class SourceFile(BaseModel):
