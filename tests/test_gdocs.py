@@ -53,7 +53,7 @@ def test_prompt_gets_public_file_and_names_private_one(google, monkeypatch, conn
     prep.build_prep_card(conn, a)
     assert [f.suffix for f in sent["files"]] == [".pdf"]
     assert "How it's turned in: on paper" in sent["prompt"]
-    assert "can't read (shared only inside the school):\n- problems" in sent["prompt"]
+    assert "can't read:\n- problems (shared only inside the school)" in sent["prompt"]
 
 
 def test_google_assignments_card():

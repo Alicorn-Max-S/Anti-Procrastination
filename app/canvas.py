@@ -163,15 +163,20 @@ _KIND_PATTERNS: list[tuple[AssignmentKind, str]] = [
     ("reading", r"\b(read|reading|response|article|chapter|annotat\w*|novel)\b"),
     ("problem_set", r"\b(problem set|pset|problems|worksheet|homework|hw|exercises|practice)\b"),
 ]
+# Homework about a test ("Test Review", "AP Calc Exam Derivative Problems", "Quiz Corrections").
+_NOT_A_TEST = r"\b(review|problems?|worksheet|study guide|corrections?|practice|prep|packet|homework|hw)\b"
 
 
 def guess_kind(assignment: Assignment) -> AssignmentKind:
-    """Rough AssignmentKind from the name and submission type. Deliberately dumb."""
+    """Rough AssignmentKind from the name and submission type. Deliberately dumb: only a hint for
+    the model, which decides the card's kind from the description (see prep.decide_kind)."""
     if "online_quiz" in assignment.submission_types:
         return "test"
     name = assignment.name.lower()
     for kind, pattern in _KIND_PATTERNS:
         if re.search(pattern, name):
+            if kind == "test" and re.search(_NOT_A_TEST, name):
+                return "problem_set"
             return kind
     return "other"
 

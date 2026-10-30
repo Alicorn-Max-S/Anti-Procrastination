@@ -129,6 +129,7 @@ class PrepCard(BaseModel):
     sources: list[SourceFile] = Field(default_factory=list)  # what the card was built from
     instructions_seen: bool = True  # False when there was no description and no readable file
     reading: ReadingPlan | None = None  # readings with a readable file
+    model_error: str = ""  # why the model card failed, when this is the template card instead
 
 
 # ---- Schedule / loop --------------------------------------------------------------------------
