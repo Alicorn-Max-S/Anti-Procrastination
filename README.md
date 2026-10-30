@@ -23,6 +23,8 @@ python -m app.demo            # four fake courses, graded history, cards, graded
 python -m app.demo --clear    # remove it again
 ```
 
+Assignments linking Google files shared only inside your school? The server can't open those without your sign-in, so a small Chrome extension fetches them in your signed-in Chrome. Setup steps are in `extension/README.md`.
+
 ## How it works
 
 1. **Sync** (`sync.py`, `canvas.py`): courses, assignments, rubric criteria, and, for graded work, teacher comments and rubric scores.
@@ -59,6 +61,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/db.py`, `app/models.py`, `app/config.py` | SQLite layer, shared types, settings |
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
 | `static/` | The single web page, PWA manifest, service worker, icons |
+| `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
 | `tests/` | Tests, run with `pytest`; they never touch Canvas, the model or push |
 
 Real school data (the DB, attachments, test photos) lives under `data/`, which is gitignored. This repo is public.
