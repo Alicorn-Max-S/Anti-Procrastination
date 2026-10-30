@@ -3,7 +3,9 @@
 - read_document(path): one local file -> Doc. PDFs are read with pypdf; DOCX/PPTX are converted
   to PDF first (convert.py). A landscape scan of a two-page book spread is split down the middle,
   so each printed page gets its own text (`book_pages`) and `real_pages` counts book pages, not
-  PDF pages. Extracted text is cached next to the file, so rebuilding a card doesn't redo it.
+  PDF pages. Google Docs exports, which pypdf reads as one word per line, get their lines rebuilt
+  from where each word sits. Extracted text is cached next to the file, so rebuilding a card
+  doesn't redo it.
 - read_assignment(assignment): everything the description points at (Canvas files, Google files
   linked or embedded, Canvas pages, web articles), fetched in parallel and read. Each comes back
   as a Doc, readable or not, with the reason when not.
@@ -32,7 +34,7 @@ from app.models import Assignment, SourceFile
 log = logging.getLogger(__name__)
 logging.getLogger("pypdf").setLevel(logging.ERROR)  # scanned PDFs log a warning per broken xref
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 FETCH_WORKERS = 4
 MODEL_MAX_BYTES = 20_000_000  # a PDF bigger than this goes to the model as its extracted text
 MODEL_PAGE_BUDGET = 60  # PDF pages sent as PDFs per card; past this, docs go as text
@@ -105,32 +107,55 @@ def _save_cache(path: Path, doc: Doc) -> None:
         log.warning("couldn't cache text for %s: %s", path.name, e)
 
 
+_LIGATURES = str.maketrans({"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"})
+
+
 def _tidy(text: str) -> str:
-    text = text.replace("﻿", "").replace("\r", "")
+    text = text.replace("﻿", "").replace("\r", "").translate(_LIGATURES)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _halves(page, width: float) -> tuple[str, str]:
-    """Text on the left and right half of a page, split by where each text run starts."""
-    sides: dict[str, list[str]] = {"left": [], "right": []}
-    last_y: dict[str, float | None] = {"left": None, "right": None}
+def _runs(page) -> list[tuple[float, float, str]]:
+    """Each text run on a page with where it starts. pypdf's own line breaks are dropped: they
+    arrive with a stale position (and Google Docs exports get one between every word)."""
+    runs: list[tuple[float, float, str]] = []
 
     def visit(text, cm, tm, font_dict, font_size):
-        if not text:
+        if not text or (not text.strip() and "\n" in text):
             return
         x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
         y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
-        side = "left" if x < width / 2 else "right"
-        out = sides[side]
-        if last_y[side] is not None and abs(y - last_y[side]) > 1 and out and not out[-1].endswith("\n"):
-            out.append("\n")  # a new line on the page, even if the PDF didn't say so
-        last_y[side] = y
-        out.append(text)
+        runs.append((x, y, text))
 
     page.extract_text(visitor_text=visit)
-    return _tidy("".join(sides["left"])), _tidy("".join(sides["right"]))
+    return runs
+
+
+def _join(runs: list[tuple[float, float, str]]) -> str:
+    """Runs back into lines: a new line wherever the text moves up or down the page."""
+    out: list[str] = []
+    last_y = None
+    for _, y, text in runs:
+        if last_y is not None and abs(y - last_y) > 1 and out and not out[-1].endswith("\n"):
+            out.append("\n")
+        last_y = y
+        out.append(text)
+    return _tidy("".join(out))
+
+
+def _word_per_line(raw: list[str]) -> bool:
+    """pypdf's text for Google Docs (and Chrome) PDFs: a blank line between every word."""
+    lines = [l for text in raw for l in text.split("\n")]
+    blank = sum(1 for l in lines if l and not l.strip())
+    words = sum(len(l.split()) for l in lines)
+    return len(lines) >= 10 and blank >= 0.4 * len(lines) and words < 3 * max(1, len(lines) - blank)
+
+
+def _halves(runs: list[tuple[float, float, str]], width: float) -> tuple[str, str]:
+    """Text on the left and right half of a page, split by where each text run starts."""
+    return _join([r for r in runs if r[0] < width / 2]), _join([r for r in runs if r[0] >= width / 2])
 
 
 _HEAD_NUMBER = [
@@ -170,6 +195,14 @@ def _read_pdf(path: Path, allow_spreads: bool = True) -> Doc:
     except Exception as e:  # pypdf raises many types for broken files; the model may still manage
         log.warning("pypdf couldn't open %s: %s", path.name, e)
         return Doc(name=path.name, path=str(path), readable=True, reason="couldn't extract its text")
+    plain: list[str] = []
+    for n, page in enumerate(raw, 1):
+        try:
+            plain.append(page.extract_text() or "")
+        except Exception as e:
+            log.warning("page %s of %s unreadable: %s", n, path.name, e)
+            plain.append("")
+    rebuild = _word_per_line(plain)
     pages: list[str] = []
     book: list[BookPage] = []
     for n, page in enumerate(raw, 1):
@@ -178,10 +211,12 @@ def _read_pdf(path: Path, allow_spreads: bool = True) -> Doc:
             width, height = float(box.width), float(box.height)
             if page.get("/Rotate") in (90, 270):
                 width, height = height, width
-            text = _tidy(page.extract_text() or "")
+            spread = allow_spreads and height and _SPREAD_MIN_RATIO < width / height < _SPREAD_MAX_RATIO
+            runs = _runs(page) if rebuild or spread else []
+            text = _join(runs) if rebuild else _tidy(plain[n - 1])
             halves = None
-            if allow_spreads and height and _SPREAD_MIN_RATIO < width / height < _SPREAD_MAX_RATIO:
-                left, right = _halves(page, width)
+            if spread:
+                left, right = _halves(runs, width)
                 if len(left) + len(right) == 0 or min(len(left), len(right)) > 0.15 * (len(left) + len(right)):
                     halves = (left, right)
         except Exception as e:

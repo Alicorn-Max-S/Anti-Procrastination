@@ -8,12 +8,17 @@ from app import gdocs, reader, web
 from app.models import Assignment
 
 
-def make_pdf(pages: list[tuple[float, float, list[tuple[float, float, str]]]]) -> bytes:
-    """A real (tiny) PDF: each page is (width, height, [(x, y, text), ...]) in Helvetica."""
+def make_pdf(pages: list[tuple[float, float, list[tuple[float, float, str]]]], google: bool = False) -> bytes:
+    """A real (tiny) PDF: each page is (width, height, [(x, y, text), ...]) in Helvetica.
+    google=True writes it the way Google Docs exports do: the page flipped, one BT block per run."""
     objects = ["<< /Type /Catalog /Pages 2 0 R >>", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
     kids = []
     for width, height, runs in pages:
-        stream = "".join(f"BT /F1 11 Tf {x} {y} Td ({text}) Tj ET\n" for x, y, text in runs).encode()
+        if google:
+            stream = (f"1 0 0 -1 0 {height} cm\n" + "".join(
+                f"BT /F1 11 Tf 1 0 0 -1 0 0 Tm {x} {y - height} Td ({text}) Tj ET\n" for x, y, text in runs)).encode()
+        else:
+            stream = "".join(f"BT /F1 11 Tf {x} {y} Td ({text}) Tj ET\n" for x, y, text in runs).encode()
         objects.append(f"<< /Length {len(stream)} >>\nstream\n{stream.decode()}endstream")
         content = len(objects)
         objects.append(
@@ -61,6 +66,23 @@ def test_portrait_pages_and_line_numbers_arent_page_numbers(tmp_path):
     doc = reader.read_document(path)
     assert doc.real_pages == 2 and doc.pdf_pages == 2
     assert [p.number for p in doc.book_pages] == [None, None]  # 5 then 15 isn't a page sequence
+
+
+def test_google_docs_exports_keep_their_lines(tmp_path):
+    def line(y: float, words: str) -> list:  # each word and each space its own run, as Google writes them
+        runs, x = [], 72.0
+        for w in words.split():
+            runs += [(x, y, w), (x + 6 * len(w), y, " ")]
+            x += 6 * len(w) + 4
+        return runs
+
+    body = "The court ruled on the case in a narrow decision that surprised observers"
+    page = line(700, "Robber Barons and Rebels") + line(680, body) + line(660, body)
+    path = tmp_path / "google-1PublicDoc.pdf"
+    path.write_bytes(make_pdf([(612, 792, page)], google=True))
+    doc = reader.read_document(path)
+    assert doc.pages[0].splitlines() == ["Robber Barons and Rebels", body, body]
+    assert reader._tidy("a ﬁnal draft") == "a final draft"
 
 
 def test_text_is_cached_next_to_the_file(tmp_path, monkeypatch):
