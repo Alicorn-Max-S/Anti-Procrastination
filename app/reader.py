@@ -16,6 +16,7 @@ through gdocs._client / _web_client, which tests replace.
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
@@ -36,6 +37,7 @@ FETCH_WORKERS = 4
 MODEL_MAX_BYTES = 20_000_000  # a PDF bigger than this goes to the model as its extracted text
 MODEL_PAGE_BUDGET = 60  # PDF pages sent as PDFs per card; past this, docs go as text
 MODEL_MAX_FILES = 5
+PAGE_CACHE_SECONDS = 6 * 3600  # Canvas pages are fetched again after this
 
 DocKind = Literal["file", "google", "page", "article", "video", "app"]
 
@@ -341,7 +343,7 @@ def _canvas_page(url: str, label: str, folder: Path) -> Doc:
         return Doc(name=label, url=url, kind="page", reason="no Canvas token")
     m = _CANVAS_PAGE.search(url)
     path = folder / f"page-{m.group(1)}-{re.sub(r'[^\w-]', '_', m.group(2))}.txt"
-    if not path.exists():
+    if not path.exists() or time.time() - path.stat().st_mtime > PAGE_CACHE_SECONDS:
         page = canvas.fetch_page(int(m.group(1)), m.group(2))
         if page is None:
             return Doc(name=label, url=url, kind="page", reason="page not found or locked")
