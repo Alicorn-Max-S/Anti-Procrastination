@@ -127,6 +127,31 @@ def due_ping(blocks: list[Block], now: datetime) -> Block | None:
     return min(due, key=lambda b: b.start) if due else None
 
 
+def undo_done(
+    blocks: list[Block], assignment_id: int, now: datetime, started: set[int]
+) -> tuple[list[Block], list[int]]:
+    """Reverse "Mark done" for one assignment. Returns (changed blocks, ids of blocks to delete).
+
+    The zero-length marker block "Mark done" adds when nothing was planned is deleted. Every other
+    done block goes back to what it would be now: started if the student started it (`started`
+    holds block ids with a recorded start), planned if it hasn't begun, otherwise missed (without
+    a ping), which asks for a new time or gets replanned like any other miss."""
+    changed: list[Block] = []
+    deleted: list[int] = []
+    for b in blocks:
+        if b.assignment_id != assignment_id or b.status != "done":
+            continue
+        if b.start == b.end:
+            deleted.append(b.id)
+        elif b.id in started:
+            changed.append(b.model_copy(update={"status": "started"}))
+        elif b.start > now:
+            changed.append(b.model_copy(update={"status": "planned"}))
+        else:
+            changed.append(b.model_copy(update={"status": "missed"}))
+    return changed, deleted
+
+
 def mark_missed(blocks: list[Block], now: datetime, grace_minutes: int = 15) -> list[Block]:
     """Blocks that were pinged and never started within the grace window, or planned blocks too
     late to ping (server was off, or the clock jumped), as copies with status 'missed'.

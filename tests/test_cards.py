@@ -219,3 +219,46 @@ def test_prompt_names_files_by_title(conn):
     a = Assignment(id=60, course_id=1, name="Lab", kind="lab", description_html="<p>x</p>")
     p = prep._prompt(a, "Physics", "x", [Link(label="l", url="https://e.x")], [], read_names=["Relative Velocity Inquiry Lab"])
     assert "Relative Velocity Inquiry Lab" in p and at(1, 1)  # at() keeps the conftest import honest
+
+
+# ---- undo "Mark done" --------------------------------------------------------------------------
+
+
+def test_undo_done_restores_each_block_sensibly():
+    from app import scheduler
+    from app.models import Block
+
+    now = at(3, 12)
+    blocks = [
+        Block(id=1, assignment_id=9, start=at(2, 16), end=at(2, 17), status="done"),  # started yesterday
+        Block(id=2, assignment_id=9, start=at(2, 18), end=at(2, 19), status="done"),  # never started
+        Block(id=3, assignment_id=9, start=at(4, 16), end=at(4, 17), status="done"),  # still ahead
+        Block(id=4, assignment_id=9, start=now, end=now, status="done"),  # Mark done's marker
+        Block(id=5, assignment_id=8, start=at(4, 16), end=at(4, 17), status="done"),  # another assignment
+    ]
+    changed, deleted = scheduler.undo_done(blocks, 9, now, started={1})
+    assert {b.id: b.status for b in changed} == {1: "started", 2: "missed", 3: "planned"}
+    assert deleted == [4]
+
+
+def test_undo_done_through_the_api(conn):
+    from fastapi.testclient import TestClient
+
+    from app import demo
+    from app.main import app
+
+    demo.seed(conn, now=at(2, 10))
+    with TestClient(app) as client:
+        client.post("/api/clock", json={"action": "set", "when": at(2, 10).isoformat()})
+        card = lambda: next(c for c in client.get("/api/cards").json() if c["assignment_id"] == 9000204)
+        planned = card()["next_block"]
+        assert client.post("/api/assignments/9000204/undone").status_code == 409  # not done yet
+        assert client.post("/api/assignments/9000204/done").status_code == 200
+        assert card()["done"] and card()["next_block"] is None
+        r = client.post("/api/assignments/9000204/undone")
+        assert r.status_code == 200
+        assert not card()["done"] and card()["next_block"] == planned  # its future block is back
+
+        r = client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "paper"})
+        assert r.status_code == 200 and card()["notes_medium"] == "paper"
+        assert client.put(f"/api/courses/{card()['course_id']}/notes", json={"medium": "slate"}).status_code == 422

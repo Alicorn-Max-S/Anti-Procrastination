@@ -21,6 +21,7 @@ MAX_SITTINGS = 5
 MIN_WORDS = 1200  # shorter than this isn't worth a plan
 MIN_PAGE_WORDS = 60  # a leading/trailing page with less text than this is front or back matter
 OPENING = "the opening"
+OPENING_WORDS = 18  # words of each section quoted to the model
 
 
 class Page(Protocol):
@@ -88,6 +89,7 @@ class _Section:
         self.first = first
         self.last = first
         self.words = 0
+        self.opening = ""  # its first words, so the model can tell what each sitting covers
 
 
 def _sections(pages: list[Page], numbers: list[int]) -> list[_Section]:
@@ -108,6 +110,9 @@ def _sections(pages: list[Page], numbers: list[int]) -> list[_Section]:
                 sections.append(_Section(OPENING, number))
             sections[-1].words += _words(line)
             sections[-1].last = number
+            if len(sections[-1].opening.split()) < OPENING_WORDS and _body(line):
+                joined = (sections[-1].opening + " " + line).replace("­ ", "")  # soft-hyphen line breaks
+                sections[-1].opening = " ".join(joined.split()[:OPENING_WORDS])
     return [s for s in sections if s.words]
 
 
@@ -186,10 +191,15 @@ def plan(pages: list[Page], file: str, assigned: tuple[int, int] | None = None) 
     minutes = max(1, round(words / WPM))
     k = max(1, min(MAX_SITTINGS, len(sections), math.ceil(minutes / SITTING_MINUTES)))
     starts = _partition([s.words for s in sections], k) + [len(sections)]
+    pdf_of = {n: getattr(p, "pdf_page", None) for p, n in pairs}  # reader.BookPage has it
     sittings = []
     for a, b in zip(starts, starts[1:]):
         group = sections[a:b]
         group_words = sum(s.words for s in group)
+        first, last = pdf_of.get(group[0].first), pdf_of.get(group[-1].last)
+        pdf = "" if first is None or (first, last) == (group[0].first, group[-1].last) else (
+            str(first) if first == last else f"{first}-{last}"
+        )
         sittings.append(
             ReadingSitting(
                 first_page=str(group[0].first),
@@ -197,6 +207,8 @@ def plan(pages: list[Page], file: str, assigned: tuple[int, int] | None = None) 
                 sections=[s.title for s in group],
                 words=group_words,
                 minutes=max(1, round(group_words / WPM)),
+                pdf_pages=pdf,
+                openings=[s.opening for s in group],
             )
         )
     return ReadingPlan(
@@ -240,8 +252,8 @@ def summary_line(p: ReadingPlan) -> str:
 def prompt_block(p: ReadingPlan) -> str:
     lines = [f"{p.file}: {summary_line(p)}"]
     for i, s in enumerate(p.sittings, 1):
-        lines.append(
-            f"  Sitting {i}: {pages_text(s.first_page, s.last_page)}, sections: "
-            + "; ".join(s.sections) + f" (about {s.minutes} min)"
-        )
+        pdf = f" (PDF pages {s.pdf_pages})" if s.pdf_pages else ""
+        lines.append(f"  Sitting {i}: {pages_text(s.first_page, s.last_page)}{pdf}, about {s.minutes} min. Sections:")
+        for title, opening in zip(s.sections, s.openings or [""] * len(s.sections)):
+            lines.append(f"    - {title}" + (f', starting "{opening} ..."' if opening else ""))
     return "\n".join(lines)

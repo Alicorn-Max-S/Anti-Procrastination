@@ -323,10 +323,8 @@ def _google_file(url: str, label: str, folder: Path) -> Doc:
         return read_document(saved.path, name=saved.title or label, url=url, kind="google")
     got = gdocs.fetch(url, folder)
     if got.path is None:
-        reason = got.reason
-        if reason == "shared only inside the school":
-            reason = browser_files.reason(url) or reason  # the extension's own words when it tried
-        return Doc(name=got.title or label, url=url, kind="google", reason=reason)
+        # the extension fetches signed in, so its reason (e.g. downloads turned off) is the truer one
+        return Doc(name=got.title or label, url=url, kind="google", reason=browser_files.reason(url) or got.reason)
     return read_document(got.path, name=got.title or label, url=url, kind="google")
 
 

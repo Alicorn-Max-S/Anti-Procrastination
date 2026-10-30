@@ -180,6 +180,11 @@ def get_block(conn: sqlite3.Connection, block_id: int) -> Block | None:
     return Block.model_validate(dict(row)) if row else None
 
 
+def delete_block(conn: sqlite3.Connection, block_id: int) -> None:
+    conn.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+    conn.commit()
+
+
 # ---- pings ------------------------------------------------------------------------------------
 
 

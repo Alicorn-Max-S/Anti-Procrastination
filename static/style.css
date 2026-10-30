@@ -193,6 +193,12 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .first-step p { margin: 0.2rem 0 0.6rem; font-weight: 600; }
 .watch { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; }
 .watch strong { font-weight: 700; }
+.reading-length { margin: -0.4rem 0 0.75rem; font-size: 0.85rem; color: var(--ink); font-weight: 600; }
+.card .note { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; font-size: 0.9rem; }
+.sources { color: var(--muted); margin-top: 0.5rem; }
+.sources p { margin: 0.15rem 0; overflow-wrap: anywhere; }
+.sources a { color: inherit; }
+.card-foot select.notes-medium { font: inherit; font-size: 0.85rem; padding: 0.15rem 0.3rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .card details { margin: 0.5rem 0; }
 .card summary { cursor: pointer; font-weight: 600; }
 .steps { padding-left: 1.2rem; margin: 0.4rem 0; }

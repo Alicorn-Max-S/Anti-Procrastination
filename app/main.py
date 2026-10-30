@@ -103,7 +103,7 @@ class Context:
         return {
             **b.model_dump(mode="json"),
             "name": a.name if a else f"Assignment {b.assignment_id}",
-            "kind": a.kind if a else "other",
+            "kind": card.kind if card else a.kind if a else "other",
             "course": self.courses.get(a.course_id, "") if a else "",
             "due_at": a.due_at.isoformat() if a and a.due_at else None,
             "first_step": card.first_step if card else "",
@@ -216,6 +216,8 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 "course": ctx.courses.get(a.course_id, ""),
                 "due_at": a.due_at.isoformat() if a.due_at else None,
                 "html_url": a.html_url,
+                "course_id": a.course_id,
+                "notes_medium": prep.notes_medium(conn, a.course_id),
                 "done": a.id in done,
                 "next_block": nb.start.isoformat() if nb else None,
             }
@@ -335,6 +337,37 @@ def assignment_done(assignment_id: int, conn=Depends(get_conn)) -> dict:
     return {"ok": True}
 
 
+@app.post("/api/assignments/{assignment_id}/undone")
+def assignment_undone(assignment_id: int, conn=Depends(get_conn)) -> dict:
+    """Undo "Mark done": its blocks go back to started / planned / missed, and the assignment gets
+    a fresh planned block if none is live."""
+    if db.get_assignment(conn, assignment_id) is None:
+        raise HTTPException(404, "No such assignment")
+    now = clock.now()
+    started = {p.block_id for p in db.list_pings(conn) if p.started_at}
+    changed, deleted = scheduler.undo_done(db.list_blocks(conn), assignment_id, now, started)
+    if not changed and not deleted:
+        raise HTTPException(409, "This assignment isn't marked done")
+    for b in changed:
+        db.save_block(conn, b)
+    for block_id in deleted:
+        db.delete_block(conn, block_id)
+    new = loop.replan(conn, now)
+    return {"restored": [b.id for b in changed], "new_blocks": [b.model_dump(mode="json") for b in new]}
+
+
+class NotesIn(BaseModel):
+    medium: Literal["paper", "doc"] | None = None
+
+
+@app.put("/api/courses/{course_id}/notes")
+def set_course_notes(course_id: int, body: NotesIn, conn=Depends(get_conn)) -> dict:
+    """Where this course's notes are kept ("paper" / "doc" / null for not set). Cards built after
+    this use it; existing cards change when regenerated."""
+    prep.set_notes_medium(conn, course_id, body.medium)
+    return {"course_id": course_id, "medium": body.medium}
+
+
 # ---- simulated clock --------------------------------------------------------------------------
 
 
@@ -393,7 +426,7 @@ def push_test(conn=Depends(get_conn)) -> dict:
 
 @app.get("/api/courses")
 def courses(conn=Depends(get_conn)) -> list[dict]:
-    return [c.model_dump() for c in db.list_courses(conn)]
+    return [{**c.model_dump(), "notes_medium": prep.notes_medium(conn, c.id)} for c in db.list_courses(conn)]
 
 
 @app.get("/api/dashboard")

@@ -100,6 +100,8 @@ class ReadingSitting(BaseModel):
     sections: list[str]
     words: int
     minutes: int
+    pdf_pages: str = ""  # the same pages as the file numbers them, e.g. "1-6", when they differ
+    openings: list[str] = Field(default_factory=list)  # first words of each section, for the prompt
 
 
 class ReadingPlan(BaseModel):

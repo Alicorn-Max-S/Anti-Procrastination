@@ -151,8 +151,8 @@ def test_attachments_give_the_card_its_sources(internet):
     from app import prep
 
     html = f'<p><a href="{DRIVE}">the problems</a></p><iframe title="Lab" src="{LAB}"></iframe>'
-    files, sources = prep._attachments(Assignment(id=32, course_id=1, name="Lab", description_html=html))
-    assert [f.suffix for f in files] == [".pdf"]
+    files, sources, docs = prep._attachments(Assignment(id=32, course_id=1, name="Lab", description_html=html))
+    assert [f.suffix for f in files] == [".pdf"] and [d.name for d in docs] == ["Relative Velocity Lab"]
     assert [(s.name, s.read, s.reason) for s in sources] == [
         ("Relative Velocity Lab", True, ""),
         ("the problems", False, "shared only inside the school"),

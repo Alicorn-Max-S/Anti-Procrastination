@@ -15,6 +15,15 @@
         "import os; os.environ.update(DB_PATH='data/preview.db', META_API_KEY='', CANVAS_TOKEN='', VAPID_PRIVATE_KEY=''); import uvicorn; uvicorn.run('app.main:app', port=8765)"
       ],
       "port": 8765
+    },
+    {
+      "name": "cards",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": [
+        "-c",
+        "import os; os.environ.update(DB_PATH='data/cards.db', BACKGROUND='false'); import uvicorn; uvicorn.run('app.main:app', port=8003)"
+      ],
+      "port": 8003
     }
   ]
 }

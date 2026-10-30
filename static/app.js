@@ -376,6 +376,13 @@ function renderCard(c) {
   meta.append(el("span", null, `· ${dueText(c.due_at)}`));
   card.append(meta, el("h2", null, c.name || `Assignment ${c.assignment_id}`));
   if (c.summary) card.append(el("p", "summary", c.summary));
+  if (c.reading) card.append(el("p", "reading-length", readingText(c.reading)));
+  if (!c.instructions_seen) {
+    card.append(el("p", "note", "Start Helper couldn't read the instructions for this one, so the steps are general. Find the handout first."));
+  }
+  if (c.generated_by === "fallback" && c.model_error) {
+    card.append(el("p", "muted small", `Template card: the model call failed (${c.model_error}). Regenerate to try again.`));
+  }
 
   const first = el("div", "first-step");
   first.append(el("div", "label", "First step · about 2 minutes"), el("p", null, c.first_step));
@@ -430,10 +437,12 @@ function renderCard(c) {
     });
     card.append(links);
   }
+  if (c.sources && c.sources.length) card.append(renderSources(c.sources));
 
   const foot = el("div", "card-foot");
   foot.append(el("span", "badge", `${c.effort} effort`));
   if (c.generated_by !== "model") foot.append(el("span", "badge", c.generated_by === "demo" ? "demo card" : "template card"));
+  foot.append(notesPicker(c));
   foot.append(el("span", "spacer"));
   const regen = button("Regenerate", "ghost", async () => {
     regen.disabled = true;
@@ -449,20 +458,85 @@ function renderCard(c) {
     }
   });
   foot.append(regen);
-  if (!c.done) {
-    foot.append(
-      button("Mark done", "ghost", async () => {
-        try {
-          await post(`/api/assignments/${c.assignment_id}/done`);
-          await refresh(true);
-        } catch (e) {
-          toast(e.message);
-        }
-      }),
-    );
-  }
+  foot.append(
+    button(c.done ? "Undo done" : "Mark done", "ghost", async () => {
+      try {
+        await post(`/api/assignments/${c.assignment_id}/${c.done ? "undone" : "done"}`);
+        renderedKeys.week = "";
+        await refresh(true);
+        if (c.done) toast(`${c.name} is back on your list.`);
+      } catch (e) {
+        toast(e.message);
+      }
+    }),
+  );
   card.append(foot);
   return card;
+}
+
+// "35 pages (pp. 177–211) · about 62 min of reading · 3 sittings"
+function readingText(r) {
+  const pages = r.first_page === r.last_page ? `p. ${r.first_page}` : `pp. ${r.first_page}–${r.last_page}`;
+  const sittings = r.sittings.length > 1 ? ` · ${r.sittings.length} sittings` : "";
+  return `${r.pages} page${r.pages === 1 ? "" : "s"} (${pages}) · about ${r.minutes} min of reading${sittings}`;
+}
+
+// What the card was built from: "Read: The Unbreakable Chain (35 pages) · Couldn't open: KEY (shared only inside the school)"
+function renderSources(sources) {
+  const box = el("div", "sources small");
+  const read = sources.filter((s) => s.read);
+  const unread = sources.filter((s) => !s.read);
+  const item = (s, why) => {
+    const span = el("span", "source");
+    const name = s.url && /^https?:\/\//i.test(s.url) ? el("a", null, s.name) : el("span", null, s.name);
+    if (name.tagName === "A") {
+      name.href = s.url;
+      name.target = "_blank";
+      name.rel = "noopener";
+    }
+    span.append(name);
+    const extra = why ? s.reason : s.pages ? `${s.pages} page${s.pages === 1 ? "" : "s"}` : "";
+    if (extra) span.append(document.createTextNode(` (${extra})`));
+    return span;
+  };
+  const line = (label, list, why) => {
+    const p = el("p", why ? "unread" : null);
+    p.append(el("strong", null, label));
+    list.forEach((s, i) => {
+      if (i) p.append(document.createTextNode(" · "));
+      p.append(item(s, why));
+    });
+    return p;
+  };
+  if (read.length) box.append(line("Read: ", read, false));
+  if (unread.length) box.append(line("Couldn't open: ", unread, true));
+  return box;
+}
+
+// Per-course setting: notes on paper / in a doc. Used by cards built (or regenerated) after it changes.
+function notesPicker(c) {
+  const select = el("select", "notes-medium");
+  select.setAttribute("aria-label", `Where you keep notes for ${c.course || "this course"}`);
+  [["", "Notes: not set"], ["paper", "Notes on paper"], ["doc", "Notes in a doc"]].forEach(([value, text]) => {
+    const o = el("option", null, text);
+    o.value = value;
+    select.append(o);
+  });
+  select.value = c.notes_medium || "";
+  select.title = "Where you keep notes for this course. Regenerate a card to use it.";
+  select.addEventListener("change", async () => {
+    try {
+      await api(`/api/courses/${c.course_id}/notes`, { method: "PUT", body: JSON.stringify({ medium: select.value || null }) });
+      cards.forEach((other) => {
+        if (other.course_id === c.course_id) other.notes_medium = select.value || null;
+      });
+      renderCards();
+      toast(`Saved for ${c.course || "this course"}. Regenerate a card to use it.`);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  return select;
 }
 
 function renderPractice(c) {

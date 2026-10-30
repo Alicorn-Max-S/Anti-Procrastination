@@ -17,6 +17,7 @@ Canvas, so there's nothing to fetch: the card's link and first step send the stu
 """
 
 import logging
+import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -44,7 +45,6 @@ log = logging.getLogger(__name__)
 
 CARD_WORKERS = 5  # model cards built at once during a sync (= the default MAX_CARDS_PER_SYNC)
 
-
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
 The point is to make starting effortless, not to do the work.
 
@@ -54,9 +54,11 @@ The point is to make starting effortless, not to do the work.
   title says test or exam. Otherwise lab, reading, essay, or other.
 - first_step: ONE physical action that takes about two minutes and needs no thinking: opening,
   finding, copying, labeling, or reading a few lines. Name the exact file, page, problem or
-  section (e.g. "Open the Lab 4 handout and copy its three research questions to the top of your
-  notes"). It must not ask the student to solve, answer, analyze, summarize or decide anything.
-  Never "review the material" or "get started".
+  section. Make it the first real piece of the work, shrunk: "Open the Lab 4 handout and read
+  step 1 of the procedure", "Copy problem 1 of the worksheet to your notes", "Read the first
+  stanza of 'A Litany for Survival'". Copying titles or headings is a ritual, not a start. It must
+  not ask the student to solve, answer, analyze, summarize or decide anything. Never "review the
+  material" or "get started".
 - Where the student writes: follow the Notes line in the prompt. Don't pick a doc or paper yourself.
 - steps: 3 to 7 short imperative steps in order, specific to this assignment, covering everything
   the rubric and instructions ask for.
@@ -68,9 +70,11 @@ The point is to make starting effortless, not to do the work.
   finding and opening that handout by name, and keep the steps to what any such assignment needs.
 - Readings: when a Reading plan is given and this is a reading, its sittings become the reading
   steps. Then put in steps only what to do besides reading (notes, questions to prepare), at most
-  3, and in reading_notes ONE short note per sitting, in order, on what to look for in it (tied to
-  the teacher's questions when there are any). The first step starts sitting 1 at its first page.
-  Otherwise reading_notes is [].
+  3, and in reading_notes ONE short note per sitting, in order, on what to look for in THAT
+  sitting's pages (its sections and their opening words are listed), tied to the teacher's
+  questions where they fit. Notes follow the pages, not the questions: a question may come up in
+  several sittings or none. Start each note "Look for" and don't repeat the pages. The first step
+  starts sitting 1 at its first page. Otherwise reading_notes is [].
 - watch_out: ONE sentence naming a specific mistake from the Past feedback list that this
   assignment could repeat: an item from the same kind of work, or one sharing a rubric criterion.
   Quote the teacher's criticism in double quotes. Never use praise, grades, or notes about where
@@ -159,12 +163,13 @@ def known_links(assignment: Assignment) -> list[Link]:
     return links
 
 
-def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile]]:
+def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile], list[reader.Doc]]:
     """Read every file and doc the description points at (reader.py: Canvas files, Google files
     linked or embedded, Canvas pages, web articles) and pick the ones to send the model.
 
-    Returns (files for the model, one SourceFile per document tried). The read=True sources line
-    up, in order, with the files; the others say why they couldn't be opened or weren't sent."""
+    Returns (files for the model, one SourceFile per document tried, the Docs sent). The read=True
+    sources and the Docs line up, in order, with the files; the other sources say why they couldn't
+    be opened or weren't sent. A Doc keeps its book pages even when its file went as text."""
     docs = reader.read_assignment(assignment)
     files, sent = reader.model_files(docs)
     sent_ids = {id(d) for d in sent}
@@ -176,7 +181,7 @@ def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile]]:
             sources.append(d.source().model_copy(update={"read": False, "reason": "not sent: too many files for one card"}))
         else:
             sources.append(d.source())
-    return files, sources
+    return files, sources, sent
 
 
 def _due_text(assignment: Assignment) -> str:
@@ -326,6 +331,10 @@ def _reading_plan(docs: list[reader.Doc], text: str) -> ReadingPlan | None:
     return reading.plan(doc.book_pages, doc.name, reading.page_range(text))
 
 
+_READ_PAGES = re.compile(r"^\s*read\b.*\bpp?\.\s*\d", re.I)  # "Read pp. 177-187 ..."
+_NOTE_PREFIX = re.compile(r"^\s*(?:sitting\s*\d+\s*)?(?:\(?pp?\.\s*[\d\s–-]+\)?\s*)?[:.\-–]\s*", re.I)  # "Sitting 1 pp. 177-187: "
+
+
 def _reading_effort(plan: ReadingPlan) -> Effort:
     if len(plan.sittings) > 1 or plan.minutes > 120:
         return "heavy"
@@ -370,8 +379,10 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     kind = decide_kind(assignment, draft.kind)
     steps, effort = draft.steps[:7], draft.effort
     if kind == "reading" and plan:
-        notes = draft.reading_notes + [""] * len(plan.sittings)
-        steps = [reading.step(s, n) for s, n in zip(plan.sittings, notes)] + draft.steps[:3]
+        notes = [_NOTE_PREFIX.sub("", n) for n in draft.reading_notes]
+        notes = [n[:1].upper() + n[1:] for n in notes] + [""] * len(plan.sittings)
+        extra = [s for s in draft.steps if not _READ_PAGES.match(s)][:3]  # the plan already has these
+        steps = [reading.step(s, n) for s, n in zip(plan.sittings, notes)] + extra
         effort = _reading_effort(plan)
     else:
         plan = None
