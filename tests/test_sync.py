@@ -85,3 +85,15 @@ def test_card_failures_show_in_progress(conn, monkeypatch):
     [failure] = progress.snapshot()["failures"]
     assert failure["name"] == "Lab 5" and "429" in failure["error"]
     assert progress.snapshot()["done"] == 2
+
+
+def test_stale_cards_are_rebuilt(conn):
+    from app.models import PrepCard
+
+    now = at(2, 10)
+    db.save_assignment(conn, Assignment(id=1, course_id=1, name="Lab 4", kind="lab", due_at=at(4, 23)))
+    db.save_assignment(conn, Assignment(id=2, course_id=1, name="Lab 5", kind="lab", due_at=at(5, 23)))
+    db.save_card(conn, PrepCard(assignment_id=1, kind="lab", summary="old", first_step="x", steps=[], stale=True))
+    db.save_card(conn, PrepCard(assignment_id=2, kind="lab", summary="fresh", first_step="x", steps=[]))
+    assert [c.assignment_id for c in prep.build_all_missing(conn, now)] == [1]
+    assert not db.get_card(conn, 1).stale and db.get_card(conn, 2).summary == "fresh"

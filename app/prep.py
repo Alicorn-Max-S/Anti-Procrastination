@@ -426,14 +426,15 @@ def build_all_missing(
     limit: int | None = None,
     progress: Progress | None = None,
 ) -> list[PrepCard]:
-    """Generate cards for upcoming assignments that don't have one yet (soonest due first).
+    """Generate cards for upcoming assignments that don't have one yet, or whose card is stale
+    (a file it couldn't open has been uploaded since), soonest due first.
 
     Model cards cost money, so they're capped per call; template cards are free and uncapped.
     Model cards are built CARD_WORKERS at a time, each on its own DB connection; a card that
     fails is reported in `progress` instead of stopping the rest.
     """
     progress = progress or Progress()
-    have = {c.assignment_id for c in db.list_cards(conn)}
+    have = {c.assignment_id for c in db.list_cards(conn) if not c.stale}
     todo = [
         a for a in upcoming(db.list_assignments(conn), now, horizon_days or settings.card_horizon_days)
         if a.id not in have

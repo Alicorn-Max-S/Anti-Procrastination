@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field
 
-from app import canvas, convert, gdocs, web
+from app import browser_files, canvas, convert, gdocs, web
 from app.config import settings
 from app.models import Assignment, SourceFile
 
@@ -315,10 +315,25 @@ def _canvas_file(endpoint: str, label: str, folder: Path) -> Doc:
 
 
 def _google_file(url: str, label: str, folder: Path) -> Doc:
+    """A Google file: the copy the Chrome extension uploaded if there is one, else a public download."""
+    saved = browser_files.stored(url)
+    if saved is not None:
+        return read_document(saved.path, name=saved.title or label, url=url, kind="google")
     got = gdocs.fetch(url, folder)
     if got.path is None:
-        return Doc(name=got.title or label, url=url, kind="google", reason=got.reason)
+        reason = got.reason
+        if reason == "shared only inside the school":
+            reason = browser_files.reason(url) or reason  # the extension's own words when it tried
+        return Doc(name=got.title or label, url=url, kind="google", reason=reason)
     return read_document(got.path, name=got.title or label, url=url, kind="google")
+
+
+def _assignment_copies(assignment: Assignment) -> list[Doc]:
+    """The student's Google Assignments copy, when the extension has uploaded it."""
+    return [
+        read_document(s.path, name=s.title or "Your copy (Google Assignments)", url=s.url, kind="google")
+        for s in browser_files.copies(assignment.id)
+    ]
 
 
 def _canvas_page(url: str, label: str, folder: Path) -> Doc:
@@ -376,14 +391,15 @@ def _read_one(item: tuple[str, str, str, DocKind], folder: Path) -> Doc:
 
 
 def read_assignment(assignment: Assignment) -> list[Doc]:
-    """Every document the assignment points at, read (or not, with the reason), in description
-    order with embedded docs first."""
+    """Every document the assignment points at, read (or not, with the reason): the student's
+    Google Assignments copy first, then embedded docs, then the rest in description order."""
+    copies = _assignment_copies(assignment)
     items = _plan(assignment)
     if not items:
-        return []
+        return copies
     folder = _folder(assignment)
     with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(items))) as pool:
-        return list(pool.map(lambda item: _read_one(item, folder), items))
+        return copies + list(pool.map(lambda item: _read_one(item, folder), items))
 
 
 def model_files(docs: list[Doc]) -> tuple[list[Path], list[Doc]]:

@@ -130,6 +130,7 @@ class PrepCard(BaseModel):
     instructions_seen: bool = True  # False when there was no description and no readable file
     reading: ReadingPlan | None = None  # readings with a readable file
     model_error: str = ""  # why the model card failed, when this is the template card instead
+    stale: bool = False  # a file it couldn't read has arrived since (browser_files); the next sync rebuilds it
 
 
 # ---- Schedule / loop --------------------------------------------------------------------------

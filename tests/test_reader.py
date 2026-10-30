@@ -157,3 +157,15 @@ def test_attachments_give_the_card_its_sources(internet):
         ("Relative Velocity Lab", True, ""),
         ("the problems", False, "shared only inside the school"),
     ]
+
+
+def test_extension_upload_beats_the_school_only_link(internet, monkeypatch, tmp_path):
+    from app import browser_files
+
+    uploaded = tmp_path / "google-1SchoolOnlyAbCdEfGhIjKl.pdf"
+    uploaded.write_bytes(make_pdf([(612, 792, [(72, 700, "Derivative problems 1-10")])]))
+    saved = browser_files.Stored(file_id="1SchoolOnlyAbCdEfGhIjKl", url=DRIVE, path=uploaded, title="AP Calc problems")
+    monkeypatch.setattr(browser_files, "stored", lambda url, conn=None: saved if "1SchoolOnly" in url else None)
+    html = f'<p><a href="{DRIVE}">the problems</a></p>'
+    [doc] = reader.read_assignment(Assignment(id=33, course_id=1, name="Calc", description_html=html))
+    assert doc.readable and doc.name == "AP Calc problems" and "Derivative problems" in doc.text
