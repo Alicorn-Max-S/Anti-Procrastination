@@ -81,3 +81,10 @@ def test_reflow_moves_past_planned_blocks_but_not_history():
     assert by_id[1].start == at(2, 15, 45)
     assert by_id[2].start == at(2, 14)
     assert by_id[1].end - by_id[1].start == timedelta(hours=1)
+
+
+def test_keep_leaves_the_block_and_records_it():
+    b = Block(id=5, assignment_id=50, start=at(2, 17), end=at(2, 18))
+    blocks, ping = apply_answer(week() + [b], 5, "keep", at(2, 16, 30), window=WINDOW)
+    assert next(x for x in blocks if x.id == 5).start == at(2, 17)
+    assert ping.answer == "keep" and ping.picked_time is None and ping.started_at is None

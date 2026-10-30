@@ -1,4 +1,4 @@
-"""Handles the check-in answer (start now / +15 min / pick a time) and reflows the week.
+"""Handles the check-in answer (start now / +15 min / pick a time / keep) and reflows the week.
 
 Takes the student's answer for one block and returns the updated full block list plus the Ping
 recording the answer. Reflow: the answered block goes where the student said; any planned block
@@ -26,8 +26,9 @@ def apply_answer(
     due: dict[int, datetime] | None = None,
     window: Window | None = None,
 ) -> tuple[list[Block], Ping]:
-    """Apply 'start_now' | 'plus_15' | 'pick_time' to a block; return reflowed blocks + the Ping.
+    """Apply 'start_now' | 'plus_15' | 'pick_time' | 'keep' to a block; return reflowed blocks + the Ping.
 
+    'keep' leaves the block where it is (the student OKs the time a missed start was moved to).
     `ping` is the notification being answered (a new one is made if the student answers before
     any ping went out); `due` maps assignment id -> due date for the at-risk flag.
     """
@@ -43,6 +44,8 @@ def apply_answer(
         if picked_time is None:
             raise ValueError("pick_time needs picked_time")
         start, status = as_local(picked_time), "planned"
+    elif answer == "keep":
+        start, status = target.start, target.status
     else:
         raise ValueError(f"unknown answer {answer!r}")
 

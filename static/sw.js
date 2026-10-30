@@ -1,7 +1,7 @@
 // Service worker: shows start-time pushes, opens the right check-in on tap, and keeps the page
 // shell cached so the installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v1";
+const CACHE = "start-helper-v2";
 const SHELL = ["/", "/static/app.js", "/static/style.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
 
 self.addEventListener("install", (event) => {
@@ -36,7 +36,12 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  const data = event.data ? event.data.json() : { title: "Time to start", body: "" };
+  let data = { title: "Time to start", body: "Open Start Helper.", url: "/" };
+  try {
+    if (event.data) data = { ...data, ...event.data.json() };
+  } catch {
+    if (event.data) data.body = event.data.text();
+  }
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
@@ -48,14 +53,17 @@ self.addEventListener("push", (event) => {
   );
 });
 
+// A tap focuses the open page and tells it which block (no reload); otherwise opens /?block=ID.
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const url = event.notification.data?.url || "/";
+  const blockId = new URL(url, location.origin).searchParams.get("block");
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (wins) => {
       const open = wins.find((w) => new URL(w.url).origin === location.origin);
-      if (open) return open.navigate(url).then((w) => (w || open).focus());
-      return self.clients.openWindow(url);
+      if (!open) return self.clients.openWindow(url);
+      await open.focus();
+      if (blockId) open.postMessage({ type: "open-block", blockId });
     }),
   );
 });

@@ -13,7 +13,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from app import db, prep, push, scheduler, sync
-from app.clock import clock
+from app.clock import as_local, clock
 from app.config import settings
 from app.models import Block, Ping
 from app.progress import Progress
@@ -39,10 +39,15 @@ def save_clock(conn: sqlite3.Connection) -> None:
 
 
 def replan(conn: sqlite3.Connection, now: datetime) -> list[Block]:
-    """Plan blocks for upcoming assignments that don't have one. Returns the new, saved blocks."""
+    """Plan blocks for upcoming assignments that don't have a live one. Returns the new, saved blocks.
+
+    A missed block is history, so an assignment whose block was missed gets a new one right away;
+    the check-in then asks the student to keep that time or pick another.
+    """
     horizon = now + timedelta(days=settings.card_horizon_days)
     assignments = [a for a in db.list_assignments(conn) if a.due_at and a.due_at <= horizon]
-    new = scheduler.plan_blocks(assignments, db.list_cards(conn), now, db.list_blocks(conn))
+    existing = [b for b in db.list_blocks(conn) if b.status != "missed"]
+    new = scheduler.plan_blocks(assignments, db.list_cards(conn), now, existing)
     for b in new:
         b.id = db.save_block(conn, b)
     return new
@@ -53,16 +58,30 @@ def _name(conn: sqlite3.Connection, assignment_id: int) -> str:
     return a.name if a else "your assignment"
 
 
+def _when(dt: datetime) -> str:
+    """'Sat 3:00 PM' in the student's zone (no %-I: Windows strftime lacks it)."""
+    t = as_local(dt)
+    return f"{t:%a} {t.hour % 12 or 12}:{t:%M %p}"
+
+
 def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
-    """Mark missed starts, then ping every block whose start time has arrived."""
-    events: dict[str, list[int]] = {"pinged": [], "missed": []}
-    for b in scheduler.mark_missed(db.list_blocks(conn), now):
+    """Mark missed starts and give each a new block, then ping every block whose start time has
+    arrived. Returns the ids of blocks pinged, missed and newly planned."""
+    events: dict[str, list[int]] = {"pinged": [], "missed": [], "new": []}
+    missed = scheduler.mark_missed(db.list_blocks(conn), now)
+    for b in missed:
         db.save_block(conn, b)
         events["missed"].append(b.id)
+    new = replan(conn, now) if missed else []
+    events["new"] = [b.id for b in new]
+    for b in missed:
+        again = next((n for n in new if n.assignment_id == b.assignment_id), None)
         push.send_ping(
             conn,
             f"Missed start: {_name(conn, b.assignment_id)}",
-            "No problem. When will you start? Tap to pick a time.",
+            f"No problem. New time: {_when(again.start)}. Tap to change it."
+            if again
+            else "No problem. When will you start? Tap to pick a time.",
             f"/?block={b.id}",
             tag=f"block-{b.id}",
         )

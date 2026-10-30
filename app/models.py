@@ -13,7 +13,7 @@ AssignmentKind = Literal["lab", "reading", "problem_set", "essay", "test", "othe
 ASSIGNMENT_KINDS: tuple[str, ...] = AssignmentKind.__args__
 Effort = Literal["light", "medium", "heavy"]
 BlockStatus = Literal["planned", "pinged", "started", "missed", "done"]
-CheckinAnswer = Literal["start_now", "plus_15", "pick_time", "none"]
+CheckinAnswer = Literal["start_now", "plus_15", "pick_time", "keep", "none"]  # keep: OK the new time after a miss
 
 
 # ---- Canvas data -----------------------------------------------------------------------------

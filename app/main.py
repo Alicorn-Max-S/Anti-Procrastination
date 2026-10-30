@@ -25,7 +25,7 @@ from app import browser_files, checkin, db, grader, loop, meta_client, prep, pus
 from app.clock import clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
-from app.models import Block, Ping, TestRow
+from app.models import Assignment, Block, Ping, TestRow
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 TICK_SECONDS = 15
@@ -114,16 +114,63 @@ def _done_assignments(blocks: list[Block]) -> set[int]:
     return {b.assignment_id for b in blocks if b.status == "done"}
 
 
-def _checkin_blocks(blocks: list[Block], now: datetime) -> list[Block]:
-    """Blocks waiting on the student: pinged ones, plus the latest unanswered miss per assignment."""
-    live = {b.assignment_id for b in blocks if b.status in scheduler.ACTIVE}
-    done = _done_assignments(blocks)
+def _closed(assignments: dict[int, Assignment], blocks: list[Block], now: datetime) -> set[int]:
+    """Assignments a missed start no longer asks about: done, submitted, or past due."""
+    return _done_assignments(blocks) | {
+        a.id for a in assignments.values() if a.submitted or (a.due_at and a.due_at < now)
+    }
+
+
+def _checkin_blocks(blocks: list[Block], pings: list[Ping], closed: set[int]) -> list[Block]:
+    """Blocks waiting on the student: pinged ones, plus each open assignment's latest unanswered miss.
+
+    A miss is answered once a ping sent at or after its start has an answer, and it drops out when
+    a later block of the same assignment is pinged or started. No age limit: a miss found after a
+    big clock jump still asks. `closed` assignments are skipped (their card says past due instead).
+    """
+    start = {b.id: b.start for b in blocks}
+    answered = {
+        p.block_id for p in pings if p.answer != "none" and p.block_id in start and p.sent_at >= start[p.block_id]
+    }
     latest_miss: dict[int, Block] = {}
     for b in blocks:
-        if b.status == "missed" and b.assignment_id not in live | done and now - b.end < timedelta(days=1):
+        if b.status == "missed":
             latest_miss[b.assignment_id] = b  # blocks are sorted by start, so the last one wins
+
+    def superseded(m: Block) -> bool:
+        return any(
+            b.assignment_id == m.assignment_id and b.status in ("pinged", "started") and b.start > m.start
+            for b in blocks
+        )
+
+    misses = [m for a, m in latest_miss.items() if a not in closed and m.id not in answered and not superseded(m)]
     pinged = [b for b in blocks if b.status == "pinged"]
-    return sorted(pinged + list(latest_miss.values()), key=lambda b: b.start)
+    return sorted(pinged + misses, key=lambda b: b.start)
+
+
+def _replacement(blocks: list[Block], missed: Block) -> Block | None:
+    """The live block that took over from a missed one: same assignment, later, planned or pinged."""
+    later = [
+        b
+        for b in blocks
+        if b.assignment_id == missed.assignment_id and b.status in ("planned", "pinged") and b.start > missed.start
+    ]
+    return min(later, key=lambda b: b.start) if later else None
+
+
+def _next_start(blocks: list[Block], now: datetime) -> Block | None:
+    """The next planned block that hasn't started yet (the clock bar's "Jump to next start")."""
+    ahead = [b for b in blocks if b.status == "planned" and b.start > now]
+    return min(ahead, key=lambda b: b.start) if ahead else None
+
+
+def _checkin_view(ctx: "Context", blocks: list[Block], b: Block) -> dict:
+    """A check-in entry. A miss also carries the block that replaced it: its new planned time."""
+    view = ctx.block(b)
+    if b.status == "missed":
+        r = _replacement(blocks, b)
+        view["replacement"] = {"id": r.id, "start": r.start.isoformat(), "at_risk": r.at_risk} if r else None
+    return view
 
 
 # ---- pages ------------------------------------------------------------------------------------
@@ -144,12 +191,12 @@ def service_worker() -> FileResponse:
 
 
 @app.get("/api/health")
-def health() -> dict:
+def health(conn=Depends(get_conn)) -> dict:
     return {
         "ok": True,
         "canvas": loop.canvas_configured(),
         "model": meta_client.configured(),
-        "push": push.configured(),
+        "push": push.configured(conn),
         "model_usage": meta_client.usage,
     }
 
@@ -175,19 +222,23 @@ def state(conn=Depends(get_conn)) -> dict:
     blocks = db.list_blocks(conn)
     day0 = now.astimezone(local_tz()).replace(hour=0, minute=0, second=0, microsecond=0)
     week = [b for b in blocks if day0 <= b.start < day0 + timedelta(days=7)]
+    pending = _checkin_blocks(blocks, db.list_pings(conn), _closed(ctx.assignments, blocks, now))
+    next_start = _next_start(blocks, now)
     return {
         "now": now.isoformat(),
         "simulated": clock.simulated,
         "week_start": day0.isoformat(),
         "blocks": [ctx.block(b) for b in week],
-        "checkin": [ctx.block(b) for b in _checkin_blocks(blocks, now)],
+        "checkin": [_checkin_view(ctx, blocks, b) for b in pending],
+        "next_start": ctx.block(next_start) if next_start else None,
         "done_assignments": sorted(_done_assignments(blocks)),
         "sync": _sync_state(conn),
         "config": {
             "canvas": loop.canvas_configured(),
             "model": meta_client.configured(),
-            "push": push.configured(),
-            "push_key": settings.vapid_public_key,
+            "push": push.configured(conn),
+            "push_key": push.keys(conn)[0],
+            "push_devices": len(db.list_subscriptions(conn)),
         },
     }
 
@@ -203,6 +254,11 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
     for b in blocks:
         if b.status in scheduler.ACTIVE and b.assignment_id not in next_block:
             next_block[b.assignment_id] = b
+    missed = {  # start-loop: each assignment's unanswered missed start
+        b.assignment_id: {"block_id": b.id, "start": b.start.isoformat()}
+        for b in _checkin_blocks(blocks, db.list_pings(conn), _closed(ctx.assignments, blocks, now))
+        if b.status == "missed"
+    }
     out = []
     for card in ctx.cards.values():
         a = ctx.assignments.get(card.assignment_id)
@@ -220,6 +276,8 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 "notes_medium": prep.notes_medium(conn, a.course_id),
                 "done": a.id in done,
                 "next_block": nb.start.isoformat() if nb else None,
+                "missed": missed.get(a.id),
+                "past_due": bool(a.due_at and a.due_at < now and a.id not in done),
             }
         )
     out.sort(key=lambda c: (c["done"], c["due_at"] is None, c["due_at"] or ""))
@@ -254,21 +312,28 @@ def plan(conn=Depends(get_conn)) -> dict:
 
 
 class CheckinIn(BaseModel):
-    answer: Literal["start_now", "plus_15", "pick_time"]
+    answer: Literal["start_now", "plus_15", "pick_time", "keep"]
     picked_time: datetime | None = None
 
 
 def _answer(conn, block_id: int, answer: str, picked_time: datetime | None = None) -> dict:
+    """Record the answer on the block that was pinged or missed. A miss that already has a new
+    block (tick replans right away) moves that one instead, so the miss stays in the history."""
     now = clock.now()
     blocks = db.list_blocks(conn)
-    if not any(b.id == block_id for b in blocks):
+    asked = next((b for b in blocks if b.id == block_id), None)
+    if asked is None:
         raise HTTPException(404, "No such block")
+    target = (_replacement(blocks, asked) if asked.status == "missed" else None) or asked
+    if answer == "keep" and target.id == block_id:
+        raise HTTPException(400, "There's no new time to keep: pick a time instead")
     due = {a.id: a.due_at for a in db.list_assignments(conn) if a.due_at}
-    ping = db.latest_ping(conn, block_id)
-    if ping and ping.answer != "none":
-        ping = None  # already answered: this answer gets its own record
+    # The open ping this answers: the new block's if it was pinged, else the miss's. An answered
+    # ping is never overwritten; the answer gets its own record on the block that was asked about.
+    pings = (db.latest_ping(conn, target.id), db.latest_ping(conn, block_id))
+    ping = next((p for p in pings if p and p.answer == "none"), None)
     try:
-        new_blocks, record = checkin.apply_answer(blocks, block_id, answer, now, picked_time, ping, due)
+        new_blocks, record = checkin.apply_answer(blocks, target.id, answer, now, picked_time, ping, due)
     except ValueError as e:
         raise HTTPException(400, str(e))
     before = {b.id: b for b in blocks}
@@ -277,11 +342,11 @@ def _answer(conn, block_id: int, answer: str, picked_time: datetime | None = Non
         old = before.get(b.id)
         if old != b:
             db.save_block(conn, b)
-            if old and (old.start, old.end) != (b.start, b.end) and b.id != block_id:
+            if old and (old.start, old.end) != (b.start, b.end) and b.id != target.id:
                 moved.append(b.id)
-    db.save_ping(conn, record)
-    target = next(b for b in new_blocks if b.id == block_id)
-    return {"block": Context(conn).block(target), "moved": moved}
+    db.save_ping(conn, record if ping else record.model_copy(update={"block_id": block_id}))
+    result = next(b for b in new_blocks if b.id == target.id)
+    return {"block": Context(conn).block(result), "moved": moved}
 
 
 @app.post("/api/blocks/{block_id}/checkin")
@@ -372,7 +437,7 @@ def set_course_notes(course_id: int, body: NotesIn, conn=Depends(get_conn)) -> d
 
 
 class ClockIn(BaseModel):
-    action: Literal["set", "advance", "reset"]
+    action: Literal["set", "advance", "reset", "next"]
     when: datetime | None = None
     minutes: float | None = None
 
@@ -384,41 +449,72 @@ def get_clock() -> dict:
 
 @app.post("/api/clock")
 def set_clock(body: ClockIn, conn=Depends(get_conn)) -> dict:
-    """Move the demo clock, then run the loop right away so a ping due at the new time fires now."""
+    """Move the demo clock, then run the loop right away so a ping due at the new time fires now.
+
+    "next" jumps to the next planned start. The reply says what happened, for the clock bar: the
+    blocks pinged and missed (a miss names its new block), and the next start after the new time.
+    """
     if body.action == "set":
         if body.when is None:
             raise HTTPException(400, "set needs `when`")
         clock.set(body.when)
     elif body.action == "advance":
         clock.advance(timedelta(minutes=body.minutes or 0))
+    elif body.action == "next":
+        target = _next_start(db.list_blocks(conn), clock.now())
+        if target is None:
+            raise HTTPException(409, "Nothing is planned after now. Sync, or set the clock by hand.")
+        clock.set(target.start)
     else:
         clock.reset()
     loop.save_clock(conn)
     events = loop.tick(conn, clock.now())
     loop.replan(conn, clock.now())
-    return {"now": clock.now().isoformat(), "simulated": clock.simulated, "events": events}
+    now = clock.now()
+    blocks = db.list_blocks(conn)
+    by_id = {b.id: b for b in blocks}
+    ctx = Context(conn)
+    next_start = _next_start(blocks, now)
+    return {
+        "now": now.isoformat(),
+        "simulated": clock.simulated,
+        "events": events,
+        "pinged": [ctx.block(by_id[i]) for i in events["pinged"]],
+        "missed": [_checkin_view(ctx, blocks, by_id[i]) for i in events["missed"]],
+        "next_start": ctx.block(next_start) if next_start else None,
+    }
 
 
 # ---- push -------------------------------------------------------------------------------------
 
 
 @app.get("/api/push/key")
-def push_key() -> dict:
-    return {"key": settings.vapid_public_key, "configured": push.configured()}
+def push_key(conn=Depends(get_conn)) -> dict:
+    return {"key": push.keys(conn)[0], "configured": push.configured(conn)}
+
+
+@app.post("/api/push/setup")
+def push_setup(conn=Depends(get_conn)) -> dict:
+    """The key the browser subscribes with. Makes a VAPID pair on first use when .env has none."""
+    key = push.ensure_keys(conn)
+    return {"key": key, "configured": bool(key), "devices": len(db.list_subscriptions(conn))}
 
 
 @app.post("/api/push/subscribe")
 def push_subscribe(subscription: dict, conn=Depends(get_conn)) -> dict:
+    """Store this browser's subscription. The page sends it again on every load, so a swapped DB heals."""
     try:
         push.save_subscription(conn, subscription)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True}
+    return {"ok": True, "devices": len(db.list_subscriptions(conn))}
 
 
 @app.post("/api/push/test")
 def push_test(conn=Depends(get_conn)) -> dict:
-    return {"sent": push.send_ping(conn, "Start Helper", "Notifications work.", "/", tag="test")}
+    """Push a test notification to every stored subscription. `sent` < `devices` means some failed."""
+    sent = push.send_ping(conn, "Start Helper", "Push notifications work.", "/", tag="test")
+    return {"sent": sent, "devices": len(db.list_subscriptions(conn))}
 
 
 # ---- graded tests + dashboard -----------------------------------------------------------------

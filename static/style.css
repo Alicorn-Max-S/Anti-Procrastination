@@ -105,6 +105,26 @@ input, select {
 .clock-now { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .clock-controls { display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .clock-controls button { padding: 0.25rem 0.6rem; font-size: 0.9rem; }
+.clock-now { flex-wrap: wrap; }
+.clock-time { display: inline-flex; align-items: baseline; gap: 0.4rem; }
+.clock-time strong { font-size: 1.25rem; }
+.clock-part { font-weight: 500; color: var(--muted); }
+.clock-controls { align-items: center; }
+.clock-preview { min-width: 9rem; }
+.clock-msg {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.95rem;
+}
+.clock-msg .close { padding: 0.1rem 0.5rem; }
+.warn-text { color: var(--warn); font-weight: 600; }
 
 /* Sync progress: shown while a sync runs, and after one that had failures. */
 .sync-panel {
@@ -164,6 +184,31 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .checkin.missed { background: var(--warn-soft); border-color: var(--warn); }
 .checkin h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
 .checkin p { margin: 0.25rem 0 0.75rem; }
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  font-weight: 600;
+}
+/* A card whose start was missed, or whose due date passed unsubmitted. */
+.card-alert { border-radius: 8px; padding: 0.65rem 0.85rem; margin: 0 0 0.75rem; border: 1px solid var(--warn); background: var(--warn-soft); }
+.card-alert strong { color: var(--warn); }
+.card-alert p { margin: 0.2rem 0 0.6rem; }
+a.button {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  text-decoration: none;
+  color: inherit;
+}
+a.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .pick { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
 .flash { animation: flash 1.6s ease-out; }

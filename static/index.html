@@ -35,17 +35,25 @@
 
     <section class="clockbar" aria-label="Demo clock">
       <div class="clock-now">
-        <span id="clock-time">--</span>
+        <span id="clock-time" class="clock-time">
+          <span id="clock-day">--</span>
+          <strong id="clock-hm">--</strong>
+          <span id="clock-part" class="clock-part"></span>
+        </span>
         <span id="clock-badge" class="badge sim" hidden>Simulated</span>
+        <span id="clock-next" class="muted small"></span>
       </div>
       <div class="clock-controls">
         <input id="clock-input" type="datetime-local" aria-label="Set the clock to" />
+        <span id="clock-preview" class="clock-preview muted small" aria-live="polite"></span>
         <button type="button" data-clock="set">Set</button>
         <button type="button" data-clock="15">+15m</button>
         <button type="button" data-clock="60">+1h</button>
         <button type="button" data-clock="1440">+1d</button>
+        <button type="button" data-clock="next" class="primary">Jump to next start</button>
         <button type="button" data-clock="reset" class="ghost">Real time</button>
       </div>
+      <div id="clock-msg" class="clock-msg" role="status" hidden></div>
     </section>
 
     <section id="checkin" class="checkin-list" aria-live="polite"></section>

@@ -24,7 +24,9 @@ let renderedKeys = { checkin: "", week: "" };
 let movedIds = new Set();
 let notified = new Set(); // "blockId:status" already announced
 let firstPoll = true;
-let pushSubscribed = false;
+let pushState = "off"; // "on": this browser is subscribed and the server has it; "failed": subscribing threw
+let pushError = "";
+let clockJustMoved = false; // the clock bar already says what a clock change did, so no extra toast
 let courses = [];
 const swReady = "serviceWorker" in navigator
   ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null)
@@ -117,19 +119,45 @@ async function refresh(reloadCards = false) {
   renderCheckin();
   renderWeek();
   notifyNew();
-  updateNotifyBtn();
+  updateNotify();
+  document.title = s.checkin.length ? `(${s.checkin.length}) Start Helper` : "Start Helper";
   if (reloadCards || s.sync.last !== lastSyncSeen) {
     lastSyncSeen = s.sync.last;
     await loadCards();
   }
 }
 
+// "early morning" next to 4:30 AM makes a wrong AM/PM obvious at a glance.
+function partOfDay(d) {
+  const h = d.getHours();
+  if (h < 4) return "night";
+  if (h < 9) return "early morning";
+  if (h < 12) return "morning";
+  if (h < 17) return "afternoon";
+  if (h < 21) return "evening";
+  return "night";
+}
+
+// "in 25 min", "in 3 h", "in 2 days"
+function inText(ms) {
+  const min = Math.round(ms / 60_000);
+  if (min <= 0) return "now";
+  if (min < 60) return `in ${min} min`;
+  const h = Math.round(min / 60);
+  return h < 36 ? `in ${h} h` : `in ${Math.round(h / 24)} days`;
+}
+
 function renderClock() {
   if (!state) return;
-  $("#clock-time").textContent = now().toLocaleString([], {
-    weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit",
-  });
+  const n = now();
+  $("#clock-day").textContent = n.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  $("#clock-hm").textContent = n.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  $("#clock-part").textContent = partOfDay(n);
   $("#clock-badge").hidden = !state.simulated;
+  const next = state.next_start;
+  $("#clock-next").textContent = next
+    ? `Next start: ${next.name} · ${fmtDayTime(new Date(next.start))} (${inText(new Date(next.start) - n)})`
+    : "Nothing planned ahead";
 }
 
 let syncTimer = null; // fast polling while a sync runs
@@ -230,10 +258,28 @@ function suggestedTime() {
 }
 
 function renderCheckin() {
-  const key = state.checkin.map((b) => `${b.id}:${b.status}`).join(",");
+  const key = [notifyPermission(), ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}`)].join(",");
   if (key === renderedKeys.checkin) return; // don't wipe a time the student is typing
   renderedKeys.checkin = key;
-  $("#checkin").replaceChildren(...state.checkin.map(checkinBox));
+  const notice = state.checkin.length ? notifyNotice() : null;
+  $("#checkin").replaceChildren(...(notice ? [notice] : []), ...state.checkin.map(checkinBox));
+}
+
+// A time input plus "Pick this time", for check-ins and card alerts.
+function pickControl(blockId, initial) {
+  const pickInput = el("input");
+  pickInput.type = "datetime-local";
+  pickInput.value = toLocalInput(initial);
+  pickInput.setAttribute("aria-label", "Start time");
+  const pick = el("span", "pick");
+  pick.append(
+    pickInput,
+    button("Pick this time", null, () => {
+      if (!pickInput.value) return toast("Choose a time first");
+      answer(blockId, "pick_time", new Date(pickInput.value).toISOString());
+    }),
+  );
+  return pick;
 }
 
 function checkinBox(b) {
@@ -241,46 +287,80 @@ function checkinBox(b) {
   const box = el("div", `checkin${missed ? " missed" : ""}`);
   box.id = `checkin-${b.id}`;
   box.append(el("h2", null, missed ? `You missed the start of ${b.name}` : `Time to start: ${b.name}`));
-  box.append(
-    el(
-      "p",
-      null,
-      missed
-        ? `It was planned for ${fmtDayTime(new Date(b.start))}. No problem: when will you start?`
-        : b.first_step
-          ? `First step: ${b.first_step}`
-          : "Open the prep card for your first step.",
-    ),
-  );
-  const pickInput = el("input");
-  pickInput.type = "datetime-local";
-  pickInput.value = toLocalInput(suggestedTime());
-  pickInput.setAttribute("aria-label", "Start time");
-  const pick = el("span", "pick");
-  pick.append(
-    pickInput,
-    button("Pick this time", null, () => {
-      if (!pickInput.value) return toast("Choose a time first");
-      answer(b.id, "pick_time", new Date(pickInput.value).toISOString());
-    }),
-  );
+  const again = missed && b.replacement ? new Date(b.replacement.start) : null;
+  let text;
+  if (!missed) text = b.first_step ? `First step: ${b.first_step}` : "Open the prep card for your first step.";
+  else if (again) {
+    text = `It was planned for ${fmtDayTime(new Date(b.start))}. No problem: I moved it to ${fmtDayTime(again)}. Keep that time or pick another.`;
+    if (b.replacement.at_risk) text += " That ends after it's due, so sooner is better.";
+  } else text = `It was planned for ${fmtDayTime(new Date(b.start))}. No problem: when will you start?`;
+  box.append(el("p", null, text));
   const actions = el("div", "actions");
-  actions.append(
-    button("Start now", "primary", () => answer(b.id, "start_now")),
-    button("+15 min", null, () => answer(b.id, "plus_15")),
-    pick,
-  );
+  actions.append(button("Start now", "primary", () => answer(b.id, "start_now")));
+  if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(b.id, "keep")));
+  actions.append(button("+15 min", null, () => answer(b.id, "plus_15")), pickControl(b.id, again || suggestedTime()));
   box.append(actions);
   return box;
+}
+
+// What a card shows when its start was missed or its due date passed (start-loop owns this;
+// renderCard puts it above the first step).
+function cardAlert(c) {
+  if (c.done) return null;
+  if (c.past_due) {
+    const box = el("div", "card-alert late");
+    box.append(
+      el("strong", null, `Past due since ${fmtDayTime(new Date(c.due_at))}`),
+      el("p", null, "Canvas doesn't show it turned in. Do it now and turn it in late, or mark it done if you handed it in on paper."),
+    );
+    const actions = el("div", "actions");
+    if (/^https?:\/\//i.test(c.html_url || "")) {
+      const a = el("a", "button primary", "Open in Canvas");
+      a.href = c.html_url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      actions.append(a);
+    }
+    actions.append(
+      button("Start now", null, () => startAssignment(c.assignment_id)),
+      button("I turned it in", "ghost", async () => {
+        try {
+          await post(`/api/assignments/${c.assignment_id}/done`);
+          renderedKeys.week = "";
+          await refresh(true);
+        } catch (e) {
+          toast(e.message);
+        }
+      }),
+    );
+    box.append(actions);
+    return box;
+  }
+  if (c.missed) {
+    const box = el("div", "card-alert missed");
+    const again = c.next_block ? new Date(c.next_block) : null;
+    box.append(
+      el("strong", null, `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`),
+      el("p", null, again ? `New time: ${fmtDayTime(again)}. Keep it, or pick another time.` : "When will you start?"),
+    );
+    const actions = el("div", "actions");
+    actions.append(button("Start now", "primary", () => answer(c.missed.block_id, "start_now")));
+    if (again) actions.append(button(`Keep ${fmtDayTime(again)}`, null, () => answer(c.missed.block_id, "keep")));
+    actions.append(pickControl(c.missed.block_id, again || suggestedTime()));
+    box.append(actions);
+    return box;
+  }
+  return null;
 }
 
 async function answer(blockId, ans, pickedTime) {
   try {
     const r = await post(`/api/blocks/${blockId}/checkin`, { answer: ans, picked_time: pickedTime ?? null });
-    movedIds = new Set([...r.moved, blockId]);
+    movedIds = new Set([...r.moved, r.block.id]); // r.block is the new block when a miss was answered
     renderedKeys.week = "";
     if (ans === "start_now") toast(r.block.first_step ? `Go: ${r.block.first_step}` : "Go!", 6000);
     else if (ans === "plus_15") toast("OK, I'll ping you again in 15 minutes.");
+    else if (ans === "keep") toast(`Kept: ${fmtDayTime(new Date(r.block.start))}. I'll ping you then.`);
     else {
       const shifted = r.moved.length ? ` ${r.moved.length} other block${r.moved.length > 1 ? "s" : ""} moved to make room.` : "";
       toast(`Moved to ${fmtDayTime(new Date(r.block.start))}.${shifted}`, 5000);
@@ -383,6 +463,9 @@ function renderCard(c) {
   if (c.generated_by === "fallback" && c.model_error) {
     card.append(el("p", "muted small", `Template card: the model call failed (${c.model_error}). Regenerate to try again.`));
   }
+
+  const alert = cardAlert(c); // missed start / past due (start-loop)
+  if (alert) card.append(alert);
 
   const first = el("div", "first-step");
   first.append(el("div", "label", "First step · about 2 minutes"), el("p", null, c.first_step));
@@ -771,27 +854,85 @@ function showTab(name) {
 }
 document.querySelectorAll("[role=tab]").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
-document.querySelectorAll("[data-clock]").forEach((btn) =>
-  btn.addEventListener("click", async () => {
-    const v = btn.dataset.clock;
-    let body;
-    if (v === "set") {
-      const val = $("#clock-input").value;
-      if (!val) return toast("Choose a date and time first");
-      body = { action: "set", when: new Date(val).toISOString() };
-    } else if (v === "reset") body = { action: "reset" };
-    else body = { action: "advance", minutes: Number(v) };
-    try {
-      const r = await post("/api/clock", body);
-      const n = r.events.pinged.length;
-      if (n) toast(`${n} ping${n > 1 ? "s" : ""} sent`);
-      else if (r.events.missed.length) toast("A start was missed");
-      await refresh(true);
-    } catch (e) {
-      toast(e.message);
+document.querySelectorAll("[data-clock]").forEach((btn) => btn.addEventListener("click", () => moveClock(btn.dataset.clock)));
+
+async function moveClock(v) {
+  let body;
+  if (v === "set") {
+    const val = $("#clock-input").value;
+    if (!val) return clockMessage("Choose a date and time first.");
+    body = { action: "set", when: new Date(val).toISOString() };
+  } else if (v === "reset" || v === "next") body = { action: v };
+  else body = { action: "advance", minutes: Number(v) };
+  let r;
+  try {
+    r = await post("/api/clock", body);
+  } catch (e) {
+    return clockMessage(e.message);
+  }
+  serverOffset = Date.parse(r.now) - Date.now();
+  clockMessage(clockSummary(r, v === "reset"), r);
+  clockJustMoved = true;
+  try {
+    await refresh(true);
+  } finally {
+    clockJustMoved = false;
+  }
+  const first = r.pinged[0] || r.missed[0];
+  if (first) flash(document.getElementById(`checkin-${first.id}`));
+}
+
+// "Clock set to Fri Oct 30, 4:30 AM (early morning). Nothing starts then. Next: Test #2, Fri 4:30 PM."
+function clockSummary(r, reset) {
+  const t = new Date(r.now);
+  const when = `${fmtDay(t)}, ${fmtTime(t)} (${partOfDay(t)})`;
+  const parts = [reset ? `Back to real time: ${when}.` : `Clock set to ${when}.`];
+  const n = r.pinged.length;
+  if (n) parts.push(`${n} ping${n > 1 ? "s" : ""} sent: ${r.pinged.map((b) => b.name).join(", ")}.`);
+  r.missed.forEach((b) =>
+    parts.push(
+      b.replacement
+        ? `Missed start: ${b.name}, moved to ${fmtDayTime(new Date(b.replacement.start))}.`
+        : `Missed start: ${b.name}.`,
+    ),
+  );
+  if (!n && !r.missed.length) {
+    parts.push("Nothing starts then.");
+    parts.push(r.next_start ? `Next: ${r.next_start.name}, ${fmtDayTime(new Date(r.next_start.start))}.` : "Nothing else is planned.");
+  }
+  return parts.join(" ");
+}
+
+// The clock bar's own line: stays until the next clock change, with the buttons that fit.
+function clockMessage(text, r) {
+  const box = $("#clock-msg");
+  box.hidden = false;
+  const actions = el("span", "actions");
+  if (r && !r.pinged.length && !r.missed.length && r.next_start) {
+    actions.append(button("Jump to next start", "primary", () => moveClock("next")));
+  }
+  if (r && (r.pinged.length || r.missed.length)) {
+    const perm = notifyPermission();
+    if (perm === "granted") actions.append(el("span", "muted small", "Notification sent."));
+    else if (perm === "default") {
+      actions.append(
+        el("span", "warn-text", "Notifications are off, so it only shows on this page."),
+        button("Turn on notifications", "primary", enableNotifications),
+      );
+    } else if (perm === "denied") {
+      actions.append(el("span", "warn-text", "Notifications are blocked for this site, so it only shows on this page."));
     }
-  }),
-);
+  }
+  actions.append(button("×", "ghost close", () => (box.hidden = true)));
+  box.replaceChildren(el("span", null, text), actions);
+}
+
+function renderClockPreview() {
+  const v = $("#clock-input").value;
+  const d = v ? new Date(v) : null;
+  $("#clock-preview").textContent = d ? `${fmtDayTime(d)} · ${partOfDay(d)}` : "";
+}
+$("#clock-input").addEventListener("input", renderClockPreview);
 
 $("#sync-btn").addEventListener("click", async () => {
   $("#sync-btn").disabled = true;
@@ -809,6 +950,9 @@ $("#sync-btn").addEventListener("click", async () => {
 // ---- notifications -----------------------------------------------------------------------------
 
 const canNotify = () => typeof Notification !== "undefined";
+const notifyPermission = () => (canNotify() ? Notification.permission : "unsupported");
+const BLOCKED_HELP =
+  "Notifications are blocked for this site. To allow them, click the icon left of the address bar, set Notifications to Allow, then reload.";
 
 function b64ToBytes(s) {
   const padded = s + "=".repeat((4 - (s.length % 4)) % 4);
@@ -816,41 +960,126 @@ function b64ToBytes(s) {
   return Uint8Array.from(raw, (ch) => ch.charCodeAt(0));
 }
 
-function updateNotifyBtn() {
+function sameKey(sub, key) {
+  const have = sub.options?.applicationServerKey;
+  if (!have) return true; // can't tell: keep it
+  const a = new Uint8Array(have);
+  const b = b64ToBytes(key);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+// Push (works with the page closed): subscribe this browser and hand the subscription to the
+// server. Runs on every load once permission is granted, so a new DB or new keys heal themselves.
+async function syncPush() {
+  const reg = await swReady;
+  if (notifyPermission() !== "granted" || !reg?.pushManager) return;
+  try {
+    const { key } = await post("/api/push/setup");
+    if (!key) return void (pushState = "off");
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, key)) {
+      await sub.unsubscribe();
+      sub = null;
+    }
+    sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) }));
+    await post("/api/push/subscribe", sub.toJSON());
+    pushState = "on";
+    pushError = "";
+  } catch (e) {
+    pushState = "failed";
+    pushError = e.message;
+  }
+}
+
+function updateNotify() {
   const btn = $("#notify-btn");
-  if (!canNotify()) return (btn.hidden = true);
-  const granted = Notification.permission === "granted";
-  const pushAvailable = state?.config.push;
-  btn.textContent = granted ? (pushSubscribed ? "Push on" : "Notifications on") : "Turn on notifications";
-  btn.disabled = granted && (pushSubscribed || !pushAvailable);
+  const perm = notifyPermission();
+  btn.hidden = perm === "unsupported";
+  btn.disabled = false;
+  if (perm === "granted") {
+    btn.textContent = pushState === "on" ? "Notifications on · test" : "Notifications on (page open) · test";
+    btn.title =
+      pushState === "on"
+        ? "Push is set up, so pings arrive even with this page closed. Click to send a test."
+        : `Pings show while this page is open${pushError ? ` (push failed: ${pushError})` : ""}. Click to send a test.`;
+  } else if (perm === "denied") {
+    btn.textContent = "Notifications blocked";
+    btn.title = BLOCKED_HELP;
+  } else {
+    btn.textContent = "Turn on notifications";
+    btn.title = "Get a notification when it's time to start";
+  }
+  if (state) renderCheckin(); // its key includes the permission, so the notice follows it
+}
+
+// Shown above the check-ins when a ping can't reach the student outside this page.
+function notifyNotice() {
+  const perm = notifyPermission();
+  if (perm === "granted") return null;
+  const box = el("div", "notice");
+  if (perm === "denied") box.append(el("span", null, BLOCKED_HELP));
+  else if (perm === "unsupported") box.append(el("span", null, "This browser can't show notifications, so keep this page open to see pings."));
+  else {
+    box.append(
+      el("span", null, "Notifications are off, so pings only show on this page."),
+      button("Turn on notifications", "primary", enableNotifications),
+    );
+  }
+  return box;
 }
 
 async function enableNotifications() {
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") return toast("Notifications are blocked in this browser's settings");
-  const reg = await swReady;
-  if (state?.config.push && state.config.push_key && reg?.pushManager) {
-    try {
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(state.config.push_key) });
-      await post("/api/push/subscribe", sub.toJSON());
-      pushSubscribed = true;
-      toast("Push notifications on, even with this page closed");
-    } catch (e) {
-      toast(`Push didn't work (${e.message}); you'll still get notifications while this page is open`, 6000);
-    }
-  } else toast("Notifications on while this page is open");
-  updateNotifyBtn();
+  const perm = notifyPermission();
+  if (perm === "unsupported") return toast("This browser can't show notifications.");
+  if (perm === "denied") return toast(BLOCKED_HELP, 9000);
+  if (perm === "default" && (await Notification.requestPermission()) !== "granted") {
+    updateNotify();
+    return toast(notifyPermission() === "denied" ? BLOCKED_HELP : "Notifications stay off for now.", 7000);
+  }
+  if (pushState !== "on") await syncPush();
+  updateNotify();
+  await testNotification();
 }
 $("#notify-btn").addEventListener("click", enableNotifications);
 
-async function showLocalNotification(title, body, blockId) {
-  const opts = { body, tag: `block-${blockId}`, icon: "/static/icons/icon-192.png", data: { url: `/?block=${blockId}` } };
-  const reg = await swReady;
-  if (reg) return reg.showNotification(title, opts);
-  new Notification(title, opts);
+// Push when this browser is subscribed (proves the whole path), else a local one.
+async function testNotification() {
+  const help = "Nothing popped up? Check Windows Settings › System › Notifications (Do not disturb, and your browser allowed).";
+  try {
+    if (pushState === "on") {
+      const r = await post("/api/push/test");
+      if (r.sent) return toast(`Test sent by push. ${help}`, 9000);
+    }
+    const shown = await showLocalNotification("Start Helper", "Notifications work.", "test");
+    toast(shown ? `Test notification shown. ${help}` : "The browser refused to show a notification.", 9000);
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
-// Pings found by polling become notifications here unless push already delivered them.
+// Through the service worker when there is one (needed on Android), else the page's own.
+async function showLocalNotification(title, body, blockId) {
+  const opts = {
+    body,
+    tag: blockId === "test" ? "test" : `block-${blockId}`,
+    icon: "/static/icons/icon-192.png",
+    data: { url: blockId === "test" ? "/" : `/?block=${blockId}` },
+  };
+  try {
+    const reg = await swReady;
+    if (reg) {
+      await reg.showNotification(title, opts);
+      return true;
+    }
+    new Notification(title, opts);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// New pings and misses found by polling: a notification (push may have shown it already; the
+// same tag replaces it rather than doubling it), a toast, and the tab title counts them.
 function notifyNew() {
   const keys = state.checkin.map((b) => `${b.id}:${b.status}`);
   if (firstPoll) {
@@ -858,41 +1087,59 @@ function notifyNew() {
     firstPoll = false;
     return;
   }
-  for (const b of state.checkin) {
-    const key = `${b.id}:${b.status}`;
-    if (notified.has(key)) continue;
-    notified.add(key);
-    if (pushSubscribed || !canNotify() || Notification.permission !== "granted") continue;
+  const fresh = state.checkin.filter((b) => !notified.has(`${b.id}:${b.status}`));
+  for (const b of fresh) {
+    notified.add(`${b.id}:${b.status}`);
+    if (notifyPermission() !== "granted") continue;
     const missed = b.status === "missed";
+    const again = missed && b.replacement ? `New time: ${fmtDayTime(new Date(b.replacement.start))}. Tap to change it.` : "When will you start? Tap to pick a time.";
     showLocalNotification(
       missed ? `Missed start: ${b.name}` : `Time to start: ${b.name}`,
-      missed ? "When will you start? Tap to pick a time." : b.first_step || "Open your prep card.",
+      missed ? again : b.first_step || "Open your prep card.",
       b.id,
     );
   }
-  if (!syncTimer) syncTimer = setInterval(refresh, 1000); // show progress while the POST runs
+  if (fresh.length && !clockJustMoved) {
+    const b = fresh[0];
+    toast(b.status === "missed" ? `Missed start: ${b.name}` : `Time to start: ${b.name}`, 6000);
+    flash(document.getElementById(`checkin-${b.id}`));
+  }
+}
+
+// A tap on a notification while the page is open: the service worker focuses it and says which block.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", async (e) => {
+    if (e.data?.type !== "open-block") return;
+    await refresh(true);
+    focusBlock(e.data.blockId);
+  });
+}
+
+function focusBlock(blockId) {
+  const box = document.getElementById(`checkin-${blockId}`);
+  if (box) return flash(box);
+  const b = state?.blocks.find((x) => String(x.id) === String(blockId));
+  if (b) {
+    showTab("cards");
+    flash(document.getElementById(`card-${b.assignment_id}`));
+  }
 }
 
 // ---- boot --------------------------------------------------------------------------------------
 
 async function boot() {
-  const reg = await swReady;
-  if (reg?.pushManager) {
-    try {
-      pushSubscribed = !!(await reg.pushManager.getSubscription());
-    } catch {}
-  }
+  await syncPush();
   showTab(store.get("tab", "cards"));
   await refresh(true);
   $("#clock-input").value = toLocalInput(now());
+  renderClockPreview();
 
   // Opened from a notification (/?block=ID): jump to that check-in.
   const params = new URLSearchParams(location.search);
   const blockId = params.get("block");
   if (blockId) {
     history.replaceState(null, "", "/");
-    const box = document.getElementById(`checkin-${blockId}`);
-    if (box) flash(box);
+    focusBlock(blockId);
   }
 
   setInterval(renderClock, 1000);
