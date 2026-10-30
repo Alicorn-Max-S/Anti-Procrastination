@@ -4,6 +4,7 @@ upload, Google Assignments copies, failures, and the key. All data here is made 
 import io
 import zipfile
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -113,12 +114,17 @@ def test_upload_refuses_pages_unknown_files_and_unasked_links(seeded):
     assert browser_files.stored(DOC) is None
 
 
-def test_same_bytes_again_are_not_new(seeded):
-    assert browser_files.save_upload(seeded, DOC, PDF, now=NOW)["new"]
+def test_new_bytes_mark_cards_for_one_rebuild_and_same_bytes_never_do(seeded):
+    db.save_card(seeded, PrepCard(assignment_id=1, kind="lab", summary="", first_step="", steps=[]))
+    first = browser_files.save_upload(seeded, DOC, PDF, now=NOW)
+    assert first["new"] and first["cards_marked"] == [1]  # assignment 2 has no card yet
+    assert db.get_card(seeded, 1).stale
+
+    db.save_card(seeded, db.get_card(seeded, 1).model_copy(update={"stale": False}))  # the sync rebuilt it
     again = browser_files.save_upload(seeded, DOC, PDF, now=NOW)
-    assert not again["new"] and again["cards_marked"] == []
+    assert not again["new"] and again["cards_marked"] == [] and not db.get_card(seeded, 1).stale
     changed = browser_files.save_upload(seeded, DOC, PDF + b"\n% edited\n", now=NOW)
-    assert changed["new"]
+    assert changed["new"] and changed["cards_marked"] == [1]
 
 
 def test_failures_rest_before_retrying_and_explain_themselves(seeded):
@@ -175,6 +181,23 @@ def test_opened_doc_linked_from_canvas_is_wanted_even_after_a_failure(seeded):
     assert got["wanted"] and got["assignment_id"] is None
     browser_files.save_upload(seeded, DOC, PDF, now=NOW)
     assert not browser_files.opened(seeded, DOC, "", NOW)["wanted"]
+
+
+def test_the_reader_uses_uploads_and_copies(seeded, monkeypatch):
+    """Across lanes: ingest's reader reads what the extension stored, without fetching Google."""
+    from app import gdocs, reader
+
+    school_only = httpx.MockTransport(lambda r: httpx.Response(401))  # what Google tells the server
+    monkeypatch.setattr(gdocs, "_client", lambda: httpx.Client(transport=school_only))
+    browser_files.save_failure(seeded, SLIDES, "restricted", now=NOW)
+    browser_files.save_upload(seeded, DOC, PDF, "Lab handout.pdf", "Lab handout", now=NOW)
+    docs = {d.url: d for d in reader.read_assignment(db.get_assignment(seeded, 1))}
+    assert docs[DOC].readable and docs[DOC].path.endswith("google-DOC_aaaaaaaaaaaaaaaaaaaa.pdf")
+    assert not docs[SLIDES].readable and docs[SLIDES].reason == browser_files.REASONS["restricted"]
+
+    browser_files.save_upload(seeded, COPY, PDF, "Alex - Lab.pdf", "Alex - Lab", assignment_id=5, now=NOW)
+    [copy] = reader.read_assignment(db.get_assignment(seeded, 5))
+    assert copy.url == COPY and copy.readable
 
 
 def test_key_is_made_once(conn):

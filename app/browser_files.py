@@ -377,7 +377,7 @@ def _mark_stale(conn: sqlite3.Connection, assignment_ids: list[int]) -> list[int
     marked = []
     for aid in assignment_ids:
         card = db.get_card(conn, aid)
-        if card is not None and "stale" in type(card).model_fields and not card.stale:
+        if card is not None and not card.stale:
             db.save_card(conn, card.model_copy(update={"stale": True}))
             marked.append(aid)
     return marked
