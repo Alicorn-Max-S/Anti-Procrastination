@@ -171,14 +171,15 @@ def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile], 
 
     Returns (files for the model, one SourceFile per document tried, the Docs sent). The read=True
     sources and the Docs line up, in order, with the files; the other sources say why they couldn't
-    be opened or weren't sent. A Doc keeps its book pages even when its file went as text."""
-    docs = reader.read_assignment(assignment)
+    be opened or weren't sent. A Doc keeps its book pages even when its file went as text. Scans
+    that get sent are transcribed first (once per file), so they have text like any other doc."""
+    docs = reader.read_scans(reader.read_assignment(assignment))
     files, sent = reader.model_files(docs)
     sent_ids = {id(d) for d in sent}
     sources = []
     for d in docs:
         if id(d) in sent_ids:
-            sources.append(d.source().model_copy(update={"read": True, "reason": ""}))
+            sources.append(d.source().model_copy(update={"read": True, "reason": reader.read_note(d)}))
         elif d.readable:
             sources.append(d.source().model_copy(update={"read": False, "reason": "not sent: too many files for one card"}))
         else:

@@ -10,14 +10,18 @@
   linked or embedded, Canvas pages, web articles), fetched in parallel and read. Each comes back
   as a Doc, readable or not, with the reason when not.
 - model_files(docs): the local files to send the model for those docs, within a size budget.
+- transcribe(doc) / read_scans(docs): a scan with no text layer, read by the model the first time
+  a card or practice set uses it and cached by file hash, so the same file is never sent twice.
 
 Canvas fetches are skipped without a token, so tests never make them. Google and web fetches go
 through gdocs._client / _web_client, which tests replace.
 """
 
+import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -27,7 +31,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field
 
-from app import browser_files, canvas, convert, gdocs, web
+from app import browser_files, canvas, convert, gdocs, meta_client, web
 from app.config import settings
 from app.models import Assignment, SourceFile
 
@@ -271,13 +275,146 @@ def _read_uncached(path: Path) -> Doc:
 
 
 def text_pages(path: Path) -> tuple[list[str], str]:
-    """Text per page and why there's none, for callers that only want text (materials.py).
-    Spreads come back as their book pages."""
+    """Text per page and why there's none (or that it came from a scan), for callers that only
+    want text (materials.py). Spreads come back as their book pages. A scan is transcribed by the
+    model the first time, so call this only for documents a card or practice set will use."""
     doc = read_document(path)
     if not doc.readable:
         return [], doc.reason
+    doc = transcribe(doc)
     pages = [p.text for p in doc.book_pages] if doc.book_pages else doc.pages
-    return [p for p in pages if p.strip()], "" if any(p.strip() for p in pages) else doc.reason
+    if not any(p.strip() for p in pages):
+        return [], doc.reason
+    return [p for p in pages if p.strip()], read_note(doc)
+
+
+# ---- scans: text read once by the model -------------------------------------------------------
+
+SCAN_MAX_PAGES = 12  # pages of one scan sent to be transcribed; the rest stay without text
+FROM_SCAN = "read from a scan by the model"
+SCAN_INSTRUCTIONS = (
+    "You transcribe scanned school documents (worksheets, answer keys, readings, tests) into plain "
+    "text. Copy the words exactly as printed or handwritten, page by page: headings, question "
+    "numbers, answer choices, worked solutions and line breaks. Write math in plain text "
+    "(x^2, sqrt(3), 30 deg, v = d/t). For a diagram or graph, write [diagram: what it shows, with "
+    "its labels and values]. Don't summarize, solve, correct or add anything."
+)
+
+
+class _ScanPage(BaseModel):
+    pdf_page: int  # 1-based page of the file
+    printed_number: str = ""  # the page number printed on the page, if it shows one
+    text: str
+
+
+class _Scan(BaseModel):
+    pages: list[_ScanPage]
+
+
+_scan_locks: dict[str, threading.Lock] = {}
+_scan_locks_guard = threading.Lock()
+
+
+def is_scan(doc: Doc) -> bool:
+    """A file the model can see that has no text of its own: a scanned PDF or a photo."""
+    return doc.readable and bool(doc.path) and not doc.text.strip() and Path(doc.path).suffix.lower() in meta_client.MIME
+
+
+def read_note(doc: Doc) -> str:
+    """Where a readable doc's text came from, when the student should know: a scan or a page view."""
+    return doc.reason if doc.readable and doc.reason.startswith((FROM_SCAN, PAGE_VIEW)) else ""
+
+
+def _scan_cache(sha: str) -> Path:
+    return Path(settings.files_dir) / "scans" / f"{sha}.json"
+
+
+def _scan_file(path: Path, pdf_pages: int, sha: str) -> Path:
+    """The file to send: the scan itself, or a copy of its first SCAN_MAX_PAGES pages."""
+    if path.suffix.lower() != ".pdf" or pdf_pages <= SCAN_MAX_PAGES:
+        return path
+    import pypdf
+
+    out = _scan_cache(sha).with_suffix(".pdf")
+    if not out.exists():
+        writer = pypdf.PdfWriter()
+        for page in pypdf.PdfReader(str(path)).pages[:SCAN_MAX_PAGES]:
+            writer.add_page(page)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("wb") as f:
+            writer.write(f)
+    return out
+
+
+def _transcribe(path: Path, pdf_pages: int, sha: str) -> list[_ScanPage]:
+    sent = _scan_file(path, pdf_pages, sha)
+    if sent.stat().st_size > MODEL_MAX_BYTES:
+        raise meta_client.MetaError(f"{sent.stat().st_size // 1_000_000} MB is too big to send")
+    n = min(pdf_pages, SCAN_MAX_PAGES) or 1
+    prompt = (
+        f"Transcribe this scan ({n} page{'' if n == 1 else 's'}): one entry per page, in order. If one "
+        "page shows two book pages side by side, give each book page its own entry with the same pdf_page."
+    )
+    got = meta_client.generate_structured(prompt, _Scan, files=[sent], instructions=SCAN_INSTRUCTIONS)
+    return [p for p in got.pages if p.text.strip()]
+
+
+def _with_scan_text(doc: Doc, pages: list[_ScanPage]) -> Doc:
+    if not pages:
+        return doc
+    total = max(doc.pdf_pages, 1)
+    read = min(total, SCAN_MAX_PAGES)
+    per_pdf = [""] * total
+    book: list[BookPage] = []
+    for p in pages:
+        n = min(max(p.pdf_page, 1), read)
+        text = _tidy(p.text)
+        per_pdf[n - 1] = (per_pdf[n - 1] + "\n\n" + text).strip()
+        book.append(BookPage(pdf_page=n, number=p.printed_number.strip() or _printed_number(text), text=text))
+    book += [BookPage(pdf_page=n) for n in range(read + 1, total + 1)]
+    reason = FROM_SCAN if read == total else f"{FROM_SCAN} (the first {read} of {total} pages)"
+    update = {"pages": per_pdf, "book_pages": _check_numbers(book), "real_pages": len(book), "reason": reason}
+    return doc.model_copy(update=update)
+
+
+def transcribe(doc: Doc) -> Doc:
+    """A scan with its text, read by the model (standard tier) the first time anything asks and
+    cached by the file's hash, so the same file in two folders is sent once. Docs that have text,
+    and every doc when the model isn't set up or fails, come back unchanged."""
+    if not is_scan(doc) or not meta_client.configured():
+        return doc
+    path = Path(doc.path)
+    try:
+        sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return doc
+    with _scan_locks_guard:
+        lock = _scan_locks.setdefault(sha, threading.Lock())
+    with lock:  # cards build on several threads: a scan two of them use is still sent once
+        cache = _scan_cache(sha)
+        try:
+            pages = [_ScanPage(**p) for p in json.loads(cache.read_text(encoding="utf-8"))["pages"]]
+        except (OSError, ValueError, KeyError, TypeError):
+            try:
+                pages = _transcribe(path, doc.pdf_pages, sha)
+            except Exception as e:  # best effort: a card never fails because a scan couldn't be read
+                log.warning("couldn't transcribe the scan %s: %s", path.name, e)
+                return doc
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"file": path.name, "pages": [p.model_dump() for p in pages]}), encoding="utf-8")
+            log.info("transcribed the scan %s: %d pages", path.name, len(pages))
+    return _with_scan_text(doc, pages)
+
+
+def read_scans(docs: list[Doc]) -> list[Doc]:
+    """docs, with the scans among those model_files would send transcribed, in parallel."""
+    _, sent = model_files(docs)
+    todo = [d for d in sent if is_scan(d)]
+    if not todo or not meta_client.configured():
+        return docs
+    with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(todo))) as pool:
+        done = {id(d): t for d, t in zip(todo, pool.map(transcribe, todo))}
+    return [done.get(id(d), d) for d in docs]
 
 
 # ---- everything an assignment links to --------------------------------------------------------

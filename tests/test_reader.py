@@ -209,3 +209,71 @@ def test_page_view_uploads_say_where_their_text_came_from(internet, monkeypatch,
     assert [(d.name, d.readable, d.reason) for d in docs] == [
         ("Lab copy", True, reader.PAGE_VIEW), ("AP Calc problems", True, reader.PAGE_VIEW)]
     assert "Derivative problems" in docs[1].text and docs[1].source().read
+
+
+@pytest.fixture
+def model(monkeypatch):
+    """A fake model that transcribes scans: records each file it was sent, one entry per page."""
+    from app import meta_client
+    from app.config import settings
+
+    object.__setattr__(settings, "meta_api_key", "key")
+    sent: list[int] = []
+
+    def fake(prompt, schema, files=None, **kw):
+        import pypdf
+
+        assert schema is reader._Scan and len(files) == 1
+        n = len(pypdf.PdfReader(str(files[0])).pages)
+        sent.append(n)
+        return reader._Scan(pages=[reader._ScanPage(pdf_page=i, text=f"1. Find the resultant {i}") for i in range(1, n + 1)])
+
+    monkeypatch.setattr(meta_client, "generate_structured", fake)
+    return sent
+
+
+def scan(path, pages: int = 2):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(make_pdf([(612, 792, [])] * pages))  # pages with no text layer
+    return path
+
+
+def test_scans_are_transcribed_once_by_file_hash(tmp_path, model):
+    first = scan(tmp_path / "a" / "Vectors KEY.pdf")
+    again = scan(tmp_path / "b" / "Vectors KEY (1).pdf")  # the same file attached twice
+    pages, note = reader.text_pages(first)
+    assert pages == ["1. Find the resultant 1", "1. Find the resultant 2"] and note == reader.FROM_SCAN
+    assert reader.text_pages(again) == (pages, note)
+    assert model == [2]
+
+
+def test_long_scans_send_only_their_first_pages(tmp_path, model):
+    doc = reader.transcribe(reader.read_document(scan(tmp_path / "book.pdf", pages=15)))
+    assert model == [reader.SCAN_MAX_PAGES] and doc.real_pages == 15
+    assert doc.reason == f"{reader.FROM_SCAN} (the first 12 of 15 pages)"
+    assert doc.pages[11] and not doc.pages[12]
+
+
+def test_scans_stay_untouched_without_the_model_or_when_it_fails(tmp_path, model, monkeypatch):
+    from app import meta_client
+    from app.config import settings
+
+    path = scan(tmp_path / "key.pdf")
+    object.__setattr__(settings, "meta_api_key", "")
+    assert reader.text_pages(path) == ([], "scanned without a text layer: the model can still read the images")
+    object.__setattr__(settings, "meta_api_key", "key")
+    real = meta_client.generate_structured
+    monkeypatch.setattr(meta_client, "generate_structured", lambda *a, **k: (_ for _ in ()).throw(meta_client.MetaError("429")))
+    assert reader.text_pages(path)[0] == []
+    monkeypatch.setattr(meta_client, "generate_structured", real)
+    assert reader.text_pages(path)[0] and model == [2]  # the failure wasn't cached
+
+
+def test_attachments_transcribe_the_scans_they_send(tmp_path, model, monkeypatch):
+    from app import prep
+
+    docs = [reader.read_document(scan(tmp_path / "hw.pdf"), name="KEY: Unit Vectors Practice")]
+    monkeypatch.setattr(reader, "read_assignment", lambda a: docs)
+    files, sources, sent = prep._attachments(Assignment(id=35, course_id=1, name="HW"))
+    assert [(s.name, s.read, s.reason) for s in sources] == [("KEY: Unit Vectors Practice", True, reader.FROM_SCAN)]
+    assert "resultant 2" in sent[0].text and files == [tmp_path / "hw.pdf"]
