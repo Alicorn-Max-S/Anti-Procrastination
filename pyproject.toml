@@ -13,6 +13,7 @@ dependencies = [
     "pywebpush>=2.0",           # phone push (no-op until VAPID keys are set)
     "tzdata",                   # IANA timezones on Windows
     "tzlocal>=5.0",             # this machine's zone, with DST rules, when TIMEZONE is blank
+    "pypdf>=5.0",               # text per page from PDFs (reader.py)
 ]
 
 [project.optional-dependencies]

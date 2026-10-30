@@ -18,15 +18,13 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel
 
-from app import canvas, convert, db, gdocs, meta_client, practice, student_model
+from app import canvas, db, meta_client, practice, reader, student_model
 from app.clock import as_local
 from app.config import settings
 from app.meta_client import MetaError, Tool
-from app.models import ASSIGNMENT_KINDS, Assignment, AssignmentKind, Effort, Link, PrepCard
+from app.models import ASSIGNMENT_KINDS, Assignment, AssignmentKind, Effort, Link, PrepCard, SourceFile
 
 log = logging.getLogger(__name__)
-
-MAX_ATTACHMENTS = 3
 
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
 The point is to make starting effortless, not to do the work.
@@ -95,39 +93,24 @@ def known_links(assignment: Assignment) -> list[Link]:
     return links
 
 
-def _attachments(assignment: Assignment) -> tuple[list[Path], list[Link]]:
-    """Download and convert up to MAX_ATTACHMENTS files: Canvas files linked in the description,
-    then Google files shared publicly. Returns (files the model can read, Google links that
-    couldn't be opened). Failures are skipped, not fatal."""
-    folder = Path(settings.files_dir) / "attachments" / str(assignment.id)
-    out: list[Path] = []
+def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile]]:
+    """Read every file and doc the description points at (reader.py: Canvas files, Google files
+    linked or embedded, Canvas pages, web articles) and pick the ones to send the model.
 
-    def keep(path: Path | None) -> bool:
-        readable = convert.model_readable(path) if path else None
-        if readable and readable not in out:
-            out.append(readable)
-        return readable is not None
-
-    if settings.canvas_base_url and settings.canvas_token:
-        for endpoint in assignment.attachment_urls[:MAX_ATTACHMENTS]:
-            try:
-                keep(canvas.download_file(endpoint, folder))
-            except httpx.HTTPError as e:
-                log.warning("attachment %s failed: %s", endpoint, e)
-
-    unreadable: list[Link] = []
-    _, links, _ = canvas.parse_description(assignment.description_html)
-    for link in links:
-        if not gdocs.is_google_file(link.url) or len(out) >= MAX_ATTACHMENTS:
-            continue
-        try:
-            ok = keep(gdocs.download(link.url, folder))
-        except httpx.HTTPError as e:
-            log.warning("google file %s failed: %s", link.url, e)
-            ok = False
-        if not ok:
-            unreadable.append(link)
-    return out, unreadable
+    Returns (files for the model, one SourceFile per document tried). The read=True sources line
+    up, in order, with the files; the others say why they couldn't be opened or weren't sent."""
+    docs = reader.read_assignment(assignment)
+    files, sent = reader.model_files(docs)
+    sent_ids = {id(d) for d in sent}
+    sources = []
+    for d in docs:
+        if id(d) in sent_ids:
+            sources.append(d.source().model_copy(update={"read": True, "reason": ""}))
+        elif d.readable:
+            sources.append(d.source().model_copy(update={"read": False, "reason": "not sent: too many files for one card"}))
+        else:
+            sources.append(d.source())
+    return files, sources
 
 
 def _due_text(assignment: Assignment) -> str:
@@ -237,7 +220,7 @@ def fallback_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
         first_step=first_step,
         steps=_FALLBACK_STEPS[assignment.kind],
         links=known_links(assignment),
-        watch_out=student_model.watch_out_line(conn, assignment.course_id, assignment.kind),
+        watch_out=student_model.watch_out_line(conn, assignment),
         generated_by="fallback",
     )
 
@@ -246,7 +229,8 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     courses = {c.id: c.name for c in db.list_courses(conn)}
     text, _, _ = canvas.parse_description(assignment.description_html)
     links = known_links(assignment)
-    files, unreadable = _attachments(assignment)
+    files, sources = _attachments(assignment)
+    unreadable = [Link(label=f"{s.name} ({s.reason})", url=s.url) for s in sources if not s.read]
     draft = meta_client.generate_structured(
         _prompt(assignment, courses.get(assignment.course_id, ""), text, links, files, unreadable),
         CardDraft,
@@ -263,9 +247,10 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
         first_step=draft.first_step,
         steps=draft.steps[:7],
         links=kept or links,
-        watch_out=draft.watch_out or student_model.watch_out_line(conn, assignment.course_id, assignment.kind),
+        watch_out=draft.watch_out or student_model.watch_out_line(conn, assignment),
         effort=draft.effort,
         generated_by="model",
+        sources=sources,
     )
 
 
