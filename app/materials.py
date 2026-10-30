@@ -6,8 +6,9 @@ question can cite.
   share a topic word with it.
 - gather: the unit's documents as Material rows: module files and pages, assignment descriptions,
   Google Docs embedded or linked in them, and teacher feedback on earlier assignments. Google Docs
-  come down as plain text; other files go through the document reader. Text is cached on disk per
-  source, so each document is downloaded and read once.
+  come down as plain text (school-only ones from the Chrome extension's uploads); other files go
+  through the document reader. Text is cached on disk per source, so each document is downloaded
+  and read once.
 - excerpts: page-sized chunks, taken in turns from each document, best topic match first, until a
   character budget is spent. Only those go to the model.
 
@@ -26,7 +27,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field
 
-from app import canvas, db, gdocs, reader
+from app import browser_files, canvas, db, gdocs, reader
 from app.config import settings
 from app.models import Assignment, Link
 
@@ -207,7 +208,8 @@ def read_file(path: Path) -> tuple[list[str], str]:
 
 
 def _google_pages(url: str, folder: Path) -> tuple[list[str], str]:
-    """A Google Doc/Slides/Sheet as plain text; a Drive file downloaded and read."""
+    """A Google Doc/Slides/Sheet as plain text, a Drive file downloaded and read, or, for files
+    shared only inside the school, the copy the Chrome extension uploaded."""
     for pattern, template in _GOOGLE_TEXT:
         if found := re.search(pattern, url):
             with gdocs._client() as c:
@@ -215,11 +217,13 @@ def _google_pages(url: str, folder: Path) -> tuple[list[str], str]:
             kind = r.headers.get("content-type", "")
             if r.status_code == 200 and kind.startswith(("text/plain", "text/csv")):
                 return [_tidy(r.text)], ""
-            return [], "shared only inside the school"
-    path = gdocs.download(url, folder)
-    if path is None:
-        return [], "shared only inside the school"
-    return read_file(path)
+            break
+    else:
+        if path := gdocs.download(url, folder):
+            return read_file(path)
+    if saved := browser_files.stored(url):
+        return read_file(saved.path)
+    return [], browser_files.reason(url) or "shared only inside the school"
 
 
 def _cache_path(key: str) -> Path:

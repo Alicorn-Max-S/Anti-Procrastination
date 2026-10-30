@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-from app import canvas, db, gdocs, materials, meta_client, practice
+from app import browser_files, canvas, db, gdocs, materials, meta_client, practice
 from app.config import settings
 from app.materials import Material
 from app.models import Assignment, PrepCard, SubmissionComment
@@ -154,6 +154,15 @@ def test_gather_reads_files_pages_docs_and_feedback_once(course, canvas_api, goo
     assert len(again) == 5
     assert all("AAAA" not in u and "BBBB" not in u for u in google)  # read docs come from the cache
     assert not any("/files/" in p or "/pages/key-unit-vectors" in p for p in canvas_api)
+
+
+def test_school_only_docs_use_the_extensions_upload(course, canvas_api, google, monkeypatch, tmp_path):
+    upload = tmp_path / "extra.txt"
+    upload.write_text("1. A plane flies north at 100 m/s in a 20 m/s east wind.", encoding="utf-8")
+    monkeypatch.setattr(browser_files, "stored", lambda url, conn=None: browser_files.Stored(
+        file_id="CCCCCCCCCCCCCCCCCCCCCCCC", url=url, path=upload) if "CCCC" in url else None)
+    docs = {m.title: m for m in materials.gather(course, TEST, materials.find_unit(course, TEST))}
+    assert "plane flies north" in docs["Extra Practice"].pages[0]
 
 
 def test_gather_without_canvas_uses_the_database_only(course, google):
