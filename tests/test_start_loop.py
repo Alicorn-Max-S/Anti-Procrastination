@@ -265,33 +265,36 @@ def test_next_due_covers_starts_misses_and_reminders():
     assert loop.next_due([], now, {}) is None
 
 
-def seed_block_in(conn, seconds: float) -> Block:
-    """One assignment with a block starting `seconds` from now on the (simulated) clock."""
-    start = sim_clock.now() + timedelta(seconds=seconds)
+def test_background_loop_sleeps_until_the_start_then_pings_it(conn, monkeypatch):
+    """No real waiting: the simulated clock is frozen and the sleep only records how long the loop
+    asked to wait, so a busy machine can't make this fail."""
+    now = at(2, 15)  # days away from real time, so a delay worked out from real time would be the cap
+    monkeypatch.setattr(sim_clock, "now", lambda: now)
+    start = now + timedelta(seconds=1.2)
     db.save_assignment(conn, Assignment(id=1, course_id=1, name="Timing", due_at=start + timedelta(days=1)))
     b = Block(assignment_id=1, start=start, end=start + timedelta(hours=1))
     b.id = db.save_block(conn, b)
-    return b
+    asked = []
 
+    async def fake_wait_for(aw, timeout):
+        aw.close()
+        asked.append(timeout)
+        raise asyncio.TimeoutError
 
-@pytest.mark.parametrize("offset_hours", [0, -6])  # real time, and a simulated clock hours behind
-def test_background_loop_pings_within_a_second_of_the_start(conn, offset_hours):
-    sim_clock.advance(timedelta(hours=offset_hours))
-    b = seed_block_in(conn, 1.2)
-    began = time.monotonic()
+    monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     asyncio.run(main._sleep_until_next(15))
+    assert asked == [pytest.approx(1.25)]  # until just after the start, not the 15 s cap
+    now += timedelta(seconds=asked[0])  # the loop wakes when it asked to
     main._tick_once()
-    waited = time.monotonic() - began
-    assert 1.1 < waited < 2.0
     ping = db.latest_ping(conn, b.id)
-    assert ping is not None and timedelta(0) <= ping.sent_at - b.start < timedelta(seconds=1)
+    assert ping is not None and ping.sent_at - b.start == timedelta(seconds=0.05)
 
 
 def test_a_clock_change_wakes_the_sleeping_loop(conn):
     async def sleep_then_measure():
         began = time.monotonic()
         threading.Timer(0.2, main.wake_loop).start()  # what POST /api/clock does, from a worker thread
-        await main._sleep_until_next(10)
+        await main._sleep_until_next(60)  # nothing planned, so only a wake ends this early
         return time.monotonic() - began
 
-    assert asyncio.run(sleep_then_measure()) < 1.0
+    assert asyncio.run(sleep_then_measure()) < 30  # woken, not timed out; loose so a busy machine passes
