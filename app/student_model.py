@@ -83,6 +83,26 @@ def weakest_cells(conn: sqlite3.Connection, course_id: int, n: int = 3) -> list[
     return out
 
 
+def misses(conn: sqlite3.Connection, course_id: int, n: int = 3) -> dict:
+    """For a prep doc's Dashboard: questions missed out of questions asked, by topic and by question
+    type, worst first: {"topics": [{"label", "wrong", "total"}], "qtypes": [...]}. Bonus questions
+    and rows without marks don't count."""
+    counts: dict[str, dict[str, list[int]]] = {"topics": defaultdict(lambda: [0, 0]), "qtypes": defaultdict(lambda: [0, 0])}
+    for r in db.list_test_rows(conn, course_id):
+        if r.bonus or not r.marks_possible or r.marks is None:
+            continue
+        wrong = r.correct is False or r.marks < r.marks_possible
+        for group, label in (("topics", r.topic or "unknown"), ("qtypes", r.qtype or "unknown")):
+            counts[group][label][0] += wrong
+            counts[group][label][1] += 1
+    out = {}
+    for group, by_label in counts.items():
+        rows = [{"label": label, "wrong": w, "total": t} for label, (w, t) in by_label.items()]
+        rows.sort(key=lambda x: (x["wrong"] / x["total"], x["wrong"]), reverse=True)
+        out[group] = rows[:n]
+    return out
+
+
 # ---- what counts as actionable ---------------------------------------------------------------
 
 _GRADE_ONLY = re.compile(r"^\W*(?:[a-z]{1,12}\s*[:=]?\s*)?\d+(?:\.\d+)?\s*(?:%|/\s*\d+(?:\.\d+)?)?\W*$", re.I)

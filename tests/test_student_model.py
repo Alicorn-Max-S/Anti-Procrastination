@@ -30,6 +30,17 @@ def test_grid_and_weakest(conn):
     assert weakest[0]["examples"][0]["teacher_note"] == "habitual past"
 
 
+def test_misses_count_questions_wrong_worst_first(conn):
+    db.save_test_rows(conn, rows())
+    m = student_model.misses(conn, 1)
+    assert m["topics"] == [
+        {"label": "pret_imp", "wrong": 2, "total": 2},
+        {"label": "irregular", "wrong": 1, "total": 1},
+        {"label": "vocab", "wrong": 0, "total": 1},  # the unscored essay row doesn't count
+    ]
+    assert [q["label"] for q in m["qtypes"]] == ["fill_in_blank", "translation", "multiple_choice"]
+
+
 def test_watch_out_prefers_rubric_losses_of_the_same_kind(conn):
     db.save_assignment(
         conn,

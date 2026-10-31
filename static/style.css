@@ -19,8 +19,10 @@
   color-scheme: light;
 }
 
+/* Dark: the system's choice, unless the student picked a mode on the Dashboard (data-theme). The
+   two blocks hold the same values. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #141413;
     --surface: #1e1e1c;
     --surface-2: #2a2a27;
@@ -38,6 +40,24 @@
     --shadow: none;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #141413;
+  --surface: #1e1e1c;
+  --surface-2: #2a2a27;
+  --ink: #ecebe7;
+  --muted: #a3a29c;
+  --line: #34332f;
+  --accent: #ff7a3d;
+  --accent-ink: #1c1c1c;
+  --accent-soft: #3a2418;
+  --warn: #f0b35a;
+  --warn-soft: #33270f;
+  --ok: #7fd18f;
+  --ok-soft: #17301c;
+  --sim: #b9a4ff;
+  --shadow: none;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -170,6 +190,11 @@ input, select {
 .tabs button[aria-selected="true"] { color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
 main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .tab-panel { border-top: 1px solid var(--line); padding-top: 1rem; }
+/* The assignments tab is the prep doc page: full width, its own background and spacing. */
+main:has(> #tab-cards:not([hidden])) { max-width: none; padding: 0; }
+#tab-cards { padding-top: 0; }
+/* Focus mode's Do Not Disturb holds the missed-start window until it's off. */
+body.pd-dnd-on #miss-modal { display: none !important; }
 .empty { color: var(--muted); }
 
 /* ---- check-in ---- */
@@ -206,10 +231,6 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .conn-list li { font-size: 0.92rem; }
 .conn-list .conn-sub { color: var(--muted); font-size: 0.85rem; }
 .conn-list .lost { color: var(--warn); }
-/* A card whose start was missed, or whose due date passed unsubmitted. */
-.card-alert { border-radius: 8px; padding: 0.65rem 0.85rem; margin: 0 0 0.75rem; border: 1px solid var(--warn); background: var(--warn-soft); }
-.card-alert strong { color: var(--warn); }
-.card-alert p { margin: 0.2rem 0 0.6rem; }
 a.button {
   display: inline-block;
   border: 1px solid var(--line);
@@ -248,71 +269,11 @@ body.modal-open { overflow: hidden; }
 .flash { animation: flash 1.6s ease-out; }
 @keyframes flash { from { box-shadow: 0 0 0 4px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
 
-/* ---- cards ---- */
-.cards { display: grid; gap: 1rem; max-width: 720px; }
-.card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1rem 1.15rem;
-  box-shadow: var(--shadow);
-}
-.card.done { opacity: 0.55; }
-.card-meta { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; font-size: 0.85rem; color: var(--muted); }
-.card h2 { margin: 0.35rem 0 0.25rem; font-size: 1.15rem; }
-.summary { margin: 0 0 0.75rem; color: var(--muted); }
-.first-step {
-  background: var(--surface-2);
-  border-left: 4px solid var(--accent);
-  border-radius: 6px;
-  padding: 0.7rem 0.85rem;
-  margin-bottom: 0.75rem;
-}
-.first-step .label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); }
-.first-step p { margin: 0.2rem 0 0.6rem; font-weight: 600; }
-.watch { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; }
-.watch strong { font-weight: 700; }
-.reading-length { margin: -0.4rem 0 0.75rem; font-size: 0.85rem; color: var(--ink); font-weight: 600; }
-.card .note { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; font-size: 0.9rem; }
-.sources { color: var(--muted); margin-top: 0.5rem; }
-.sources p { margin: 0.15rem 0; overflow-wrap: anywhere; }
-.sources a { color: inherit; }
-.sources a.open-doc { display: inline-block; margin-left: 0.15rem; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); text-decoration: none; font-weight: 600; white-space: nowrap; }
-.notes-ask { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0 0; }
-.notes-ask p { margin: 0 0 0.4rem; font-weight: 600; }
+/* ---- course settings (Dashboard) ---- */
 .notes-settings { display: grid; gap: 0.35rem; }
 .notes-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
-.card details { margin: 0.5rem 0; }
-.card summary { cursor: pointer; font-weight: 600; }
-.steps { padding-left: 1.2rem; margin: 0.4rem 0; }
-.steps li { margin: 0.2rem 0; }
-.steps label { display: flex; gap: 0.5rem; align-items: baseline; cursor: pointer; }
-.steps input:checked + span { text-decoration: line-through; color: var(--muted); }
-.card .step-list { margin: 0.2rem 0 0.4rem 1.6rem; }
-.card .step-list summary { font-weight: 500; color: var(--accent); font-size: 0.9rem; }
-.step-list ol { padding-left: 1.2rem; margin: 0.3rem 0 0; display: grid; gap: 0.35rem; font-size: 0.92rem; }
-.links { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.5rem 0; }
-.links a {
-  font-size: 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 0.15rem 0.65rem;
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-.card-foot { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.75rem; font-size: 0.85rem; color: var(--muted); }
-.card-foot .spacer { flex: 1; }
-.card-foot button { font-size: 0.85rem; padding: 0.2rem 0.6rem; }
-
-.practice { margin: 0.5rem 0; }
-.focus { font-size: 0.9rem; color: var(--muted); margin: 0.25rem 0 0.5rem; }
-.practice ol { padding-left: 1.2rem; margin: 0; display: grid; gap: 0.6rem; }
-.practice .q { font-weight: 500; }
-.practice .choices { list-style: upper-alpha; padding-left: 1.4rem; margin: 0.25rem 0; }
-.practice details { margin: 0.2rem 0 0; }
-.practice details summary { font-weight: 500; color: var(--accent); font-size: 0.9rem; }
-.q-meta { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.15rem; }
-.q-source { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
+.notes-controls { display: flex; align-items: center; gap: 0.25rem 0.75rem; flex-wrap: wrap; }
+.mode-row { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
 
 /* ---- week ---- */
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.5rem; margin-bottom: 0.75rem; }

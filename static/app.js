@@ -377,12 +377,12 @@ function checkinBox(b) {
   return box;
 }
 
-// What a card shows when its start was missed or its due date passed (start-loop owns this;
-// renderCard puts it above the first step).
+// What a prep doc shows when its start was missed or its due date passed (start-loop owns this;
+// prepdoc.js puts it above the template, as a grey tile).
 function cardAlert(c) {
   if (c.done) return null;
   if (c.past_due) {
-    const box = el("div", "card-alert late");
+    const box = el("div", "pd-tile-box");
     box.append(
       el("strong", null, `Past due since ${fmtDayTime(new Date(c.due_at))}`),
       el("p", null, "Canvas doesn't show it turned in. Do it now and turn it in late, or mark it done if you handed it in on paper."),
@@ -411,7 +411,7 @@ function cardAlert(c) {
     return box;
   }
   if (c.missed) {
-    const box = el("div", "card-alert missed");
+    const box = el("div", "pd-tile-box");
     box.append(el("strong", null, `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}. When will you start?`));
     const entry = state?.checkin.find((b) => b.id === c.missed.block_id) || { id: c.missed.block_id, choices: [] };
     box.append(...startButtons(entry));
@@ -442,10 +442,8 @@ async function answer(blockId, ans, pickedTime) {
       toast(`Set for ${fmtDayTime(new Date(r.block.start))}. I'll ping you then.${shifted}`, 5000);
     }
     await refresh(true);
-    if (ans === "start_now") {
-      showTab("cards");
-      flash(document.getElementById(`card-${r.block.assignment_id}`));
-    } else if (ans === "pick_time") showTab("week");
+    if (ans === "start_now") openDoc(r.block.assignment_id);
+    else if (ans === "pick_time") showTab("week");
   } catch (e) {
     toast(e.message);
   }
@@ -486,10 +484,7 @@ function blockEl(b) {
   const meta = [b.course, b.status !== "planned" ? b.status : "", b.at_risk ? "ends after due date" : ""].filter(Boolean);
   if (meta.length) n.append(el("div", "muted", meta.join(" · ")));
   n.title = b.first_step || b.name;
-  n.addEventListener("click", () => {
-    showTab("cards");
-    flash(document.getElementById(`card-${b.assignment_id}`));
-  });
+  n.addEventListener("click", () => openDoc(b.assignment_id));
   return n;
 }
 
@@ -505,21 +500,13 @@ async function loadCards() {
   renderCards();
 }
 
+// The Cards tab is the assignment list or one prep doc (prepdoc.js).
 function renderCards() {
-  const root = $("#cards");
-  if (!cards.length) {
-    root.replaceChildren(
-      el(
-        "p",
-        "empty",
-        state?.config.canvas
-          ? "No open work due in the next two weeks."
-          : "No cards yet. Put your Canvas token in .env and press Sync, or run `python -m app.demo` for sample data.",
-      ),
-    );
-    return;
-  }
-  // Ask where notes live once per course: on its first open card that has the student write.
+  pdRender();
+}
+
+// Ask where notes live once per course: on its first open card that has the student write.
+function notesAskIds() {
   const asking = new Set();
   const askedCourses = new Set();
   for (const c of cards) {
@@ -528,128 +515,7 @@ function renderCards() {
     askedCourses.add(c.course_id);
     asking.add(c.assignment_id);
   }
-  root.replaceChildren(...cards.map((c) => renderCard(c, asking.has(c.assignment_id))));
-}
-
-function renderCard(c, askNotes = false) {
-  const card = el("article", `card${c.done ? " done" : ""}`);
-  card.id = `card-${c.assignment_id}`;
-
-  const meta = el("div", "card-meta");
-  meta.append(el("span", "badge", label(c.kind)));
-  if (c.course) meta.append(el("span", null, c.course));
-  meta.append(el("span", null, `· ${dueText(c.due_at)}`));
-  card.append(meta, el("h2", null, c.name || `Assignment ${c.assignment_id}`));
-  if (c.summary) card.append(el("p", "summary", c.summary));
-  if (c.reading) card.append(el("p", "reading-length", readingText(c.reading)));
-  if (!c.instructions_seen) {
-    card.append(el("p", "note", "Start Helper couldn't read the instructions for this one, so the steps are general. Find the handout first."));
-  }
-  if (c.generated_by === "fallback" && c.model_error) {
-    card.append(el("p", "muted small", `Template card: the model call failed (${c.model_error}). Regenerate to try again.`));
-  }
-
-  const alert = cardAlert(c); // missed start / past due (start-loop)
-  if (alert) card.append(alert);
-
-  const first = el("div", "first-step");
-  first.append(el("div", "label", "First step · about 2 minutes"), el("p", null, c.first_step));
-  const firstActions = el("div", "actions");
-  if (!c.done) firstActions.append(button("Start now", "primary", () => startAssignment(c.assignment_id)));
-  if (c.next_block) firstActions.append(el("span", "muted small", `Planned for ${fmtDayTime(new Date(c.next_block))}`));
-  first.append(firstActions);
-  card.append(first);
-
-  if (c.watch_out) {
-    const w = el("p", "watch");
-    w.append(el("strong", null, "Watch out: "), document.createTextNode(c.watch_out));
-    card.append(w);
-  }
-
-  if (c.kind === "test" && (c.practice.length || c.focus)) card.append(renderPractice(c));
-
-  if (c.steps.length) {
-    const details = el("details");
-    details.open = c.kind !== "test";
-    details.append(el("summary", null, `Steps (${c.steps.length})`));
-    const key = `steps-${c.assignment_id}`;
-    const checked = new Set(store.get(key, []));
-    const ol = el("ol", "steps");
-    c.steps.forEach((s, i) => {
-      const li = el("li");
-      const lab = el("label");
-      const box = el("input");
-      box.type = "checkbox";
-      box.checked = checked.has(i);
-      box.addEventListener("change", () => {
-        box.checked ? checked.add(i) : checked.delete(i);
-        store.set(key, [...checked]);
-      });
-      lab.append(box, el("span", null, s));
-      li.append(lab);
-      // The teacher's list this step refers to ("the 3 discussion questions"), word for word.
-      for (const list of (c.step_lists || []).filter((x) => x.step === i)) {
-        const more = el("details", "step-list");
-        more.append(el("summary", null, `Show ${list.label}`));
-        const items = el("ol");
-        list.items.forEach((t) => items.append(el("li", null, t)));
-        more.append(items);
-        li.append(more);
-      }
-      ol.append(li);
-    });
-    details.append(ol);
-    card.append(details);
-  }
-
-  const safeLinks = c.links.filter((l) => /^https?:\/\//i.test(l.url));
-  if (safeLinks.length) {
-    const links = el("div", "links");
-    safeLinks.forEach((l) => {
-      const a = el("a", null, l.label);
-      a.href = l.url;
-      a.target = "_blank";
-      a.rel = "noopener";
-      links.append(a);
-    });
-    card.append(links);
-  }
-  if (c.sources && c.sources.length) card.append(renderSources(c.sources));
-  if (askNotes) card.append(notesAsk(c));
-  if (c.stale) card.append(el("p", "muted small", "This card will be rebuilt on the next sync."));
-
-  const foot = el("div", "card-foot");
-  foot.append(el("span", "badge", `${c.effort} effort`));
-  if (c.generated_by !== "model") foot.append(el("span", "badge", c.generated_by === "demo" ? "demo card" : "template card"));
-  foot.append(el("span", "spacer"));
-  const regen = button("Regenerate", "ghost", async () => {
-    regen.disabled = true;
-    regen.textContent = "Regenerating…";
-    try {
-      await post(`/api/cards/${c.assignment_id}/regenerate`);
-      await loadCards();
-      toast("Card updated");
-    } catch (e) {
-      toast(e.message);
-      regen.disabled = false;
-      regen.textContent = "Regenerate";
-    }
-  });
-  foot.append(regen);
-  foot.append(
-    button(c.done ? "Undo done" : "Mark done", "ghost", async () => {
-      try {
-        await post(`/api/assignments/${c.assignment_id}/${c.done ? "undone" : "done"}`);
-        renderedKeys.week = "";
-        await refresh(true);
-        if (c.done) toast(`${c.name} is back on your list.`);
-      } catch (e) {
-        toast(e.message);
-      }
-    }),
-  );
-  card.append(foot);
-  return card;
+  return asking;
 }
 
 // "35 pages (pp. 177–211) · about 62 min of reading · 3 sittings"
@@ -657,45 +523,6 @@ function readingText(r) {
   const pages = r.first_page === r.last_page ? `p. ${r.first_page}` : `pp. ${r.first_page}–${r.last_page}`;
   const sittings = r.sittings.length > 1 ? ` · ${r.sittings.length} sittings` : "";
   return `${r.pages} page${r.pages === 1 ? "" : "s"} (${pages}) · about ${r.minutes} min of reading${sittings}`;
-}
-
-// What the card was built from: "Read: The Unbreakable Chain (35 pages) · Couldn't open: KEY (shared only inside the school)"
-function renderSources(sources) {
-  const box = el("div", "sources small");
-  const read = sources.filter((s) => s.read);
-  const unread = sources.filter((s) => !s.read);
-  const link = (text, url, cls = null) => {
-    const a = el("a", cls, text);
-    a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener";
-    return a;
-  };
-  const item = (s, why) => {
-    const span = el("span", "source");
-    // A Google file the server couldn't fetch: opening it in Chrome lets the extension save it for the next sync.
-    const openDoc = why && /^https:\/\/(docs|drive)\.google\.com\//i.test(s.url || "");
-    const web = s.url && /^https?:\/\//i.test(s.url) && !openDoc;
-    span.append(web ? link(s.name, s.url) : el("span", null, s.name));
-    // A read file's reason is a note on how it was read, e.g. "read from the page view: downloading is turned off".
-    const pages = !why && s.pages ? `${s.pages} page${s.pages === 1 ? "" : "s"}` : "";
-    const extra = [pages, s.reason].filter(Boolean).join(", ");
-    if (extra) span.append(document.createTextNode(` (${extra})`));
-    if (openDoc) span.append(document.createTextNode(" "), link("Open this doc", s.url, "open-doc"));
-    return span;
-  };
-  const line = (label, list, why) => {
-    const p = el("p", why ? "unread" : null);
-    p.append(el("strong", null, label));
-    list.forEach((s, i) => {
-      if (i) p.append(document.createTextNode(" · "));
-      p.append(item(s, why));
-    });
-    return p;
-  };
-  if (read.length) box.append(line("Read: ", read, false));
-  if (unread.length) box.append(line("Couldn't open: ", unread, true));
-  return box;
 }
 
 // ---- where each course's notes live -----------------------------------------------------------
@@ -721,15 +548,15 @@ async function setNotes(courseId, courseName, medium) {
   }
 }
 
-// "Do you keep US History notes on paper or in a doc?", once per course, on a card with writing steps.
+// "Do you keep US History notes on paper or in a doc?", once per course, on a prep doc with writing steps.
 function notesAsk(c) {
-  const box = el("div", "notes-ask");
-  box.append(el("p", null, `Do you keep ${c.course || "this course's"} notes on paper or in a doc?`));
+  const box = el("div", "pd-tile-box");
+  box.append(el("strong", null, `Do you keep ${c.course || "this course's"} notes on paper or in a doc?`));
   const actions = el("div", "actions");
   actions.append(
-    button("On paper", "ghost", () => setNotes(c.course_id, c.course, "paper")),
-    button("In a doc", "ghost", () => setNotes(c.course_id, c.course, "doc")),
-    button("Not now", "ghost", () => {
+    button("On paper", null, () => setNotes(c.course_id, c.course, "paper")),
+    button("In a doc", null, () => setNotes(c.course_id, c.course, "doc")),
+    button("Not now", null, () => {
       store.set(`notesAskSkipped:${c.course_id}`, true);
       renderCards();
     }),
@@ -759,60 +586,22 @@ function renderNotesSettings() {
         select.append(o);
       });
       select.value = course.notes_medium || "";
+      select.setAttribute("aria-label", `Where you keep ${course.name} notes`);
       select.addEventListener("change", () => setNotes(course.id, course.name, select.value || null));
-      const name = el("label", null, course.name);
-      name.htmlFor = select.id;
-      row.append(name, select);
+      const controls = el("div", "notes-controls");
+      controls.append(pdSwatches(course), select);
+      row.append(el("span", null, course.name), controls);
       return row;
     }),
   );
 }
 
-function renderPractice(c) {
-  const box = el("div", "practice");
-  box.append(el("h3", null, c.practice.length ? `Practice set (${c.practice.length})` : "Practice set"));
-  if (c.focus) box.append(el("p", "focus", c.focus));
-  if (!c.practice.length) {
-    box.append(el("p", "muted small", "Set META_API_KEY to get questions from this unit's documents. Add graded tests on the Dashboard to aim them at your weak spots."));
-    return box;
-  }
-  const ol = el("ol");
-  c.practice.forEach((q) => {
-    const li = el("li");
-    li.append(el("div", "q", q.prompt));
-    if (q.choices.length) {
-      const choices = el("ol", "choices");
-      q.choices.forEach((ch) => choices.append(el("li", null, ch)));
-      li.append(choices);
-    }
-    const meta = el("div", "q-meta");
-    meta.append(
-      el("span", "badge", label(q.topic)),
-      el("span", "badge", label(q.qtype)),
-      el("span", `badge ${q.verified ? "ok" : "warn"}`, q.verified ? "answer double-checked" : "answer unchecked"),
-    );
-    li.append(meta);
-    if (q.source) {
-      const from = el("div", "q-source", "From ");
-      if (/^https?:\/\//i.test(q.source_url || "")) {
-        const a = el("a", null, q.source);
-        a.href = q.source_url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        from.append(a);
-      } else {
-        from.append(q.source);
-      }
-      li.append(from);
-    }
-    const det = el("details");
-    det.append(el("summary", null, "Show answer"), el("p", null, q.answer));
-    if (q.explanation) det.append(el("p", "muted small", q.explanation));
-    li.append(det);
-    ol.append(li);
-  });
-  box.append(ol);
-  return box;
+// Prep docs follow the system's light or dark mode unless the student picks one here.
+function renderModeSetting() {
+  const select = $("#mode-select");
+  if (!select) return;
+  select.value = store.get("pdMode", "system");
+  select.onchange = () => pdSetMode(select.value);
 }
 
 async function startAssignment(id) {
@@ -1043,6 +832,7 @@ async function loadConnections() {
 async function loadDashboard() {
   if (!courses.length) await loadCourses();
   renderNotesSettings();
+  renderModeSetting();
   loadConnections();
   const id = $("#course-select").value;
   if (!id) {
@@ -1497,6 +1287,8 @@ function notifyNew() {
     return;
   }
   const fresh = state.checkin.filter((b) => !notified.has(keyOf(b)));
+  // Focus mode's Do Not Disturb: these wait in the check-in list instead of interrupting.
+  if (pdQuiet()) return void fresh.forEach((b) => notified.add(keyOf(b)));
   for (const b of fresh) {
     notified.add(keyOf(b));
     if (notifyPermission() !== "granted") continue;
@@ -1612,17 +1404,16 @@ function focusBlock(blockId) {
   const box = document.getElementById(`checkin-${blockId}`);
   if (box) return flash(box);
   const b = state?.blocks.find((x) => String(x.id) === String(blockId));
-  if (b) {
-    showTab("cards");
-    flash(document.getElementById(`card-${b.assignment_id}`));
-  }
+  if (b) openDoc(b.assignment_id);
 }
 
 // ---- boot --------------------------------------------------------------------------------------
 
 async function boot() {
+  pdApplyMode();
+  pdRoute(false); // a prep doc's address (#/prep/ID) opens it once the cards are in
   await syncPush();
-  showTab(store.get("tab", "cards"));
+  showTab(pdOpen !== null ? "cards" : store.get("tab", "cards"));
   await refresh(true);
   $("#clock-input").value = toLocalInput(now());
   renderClockPreview();

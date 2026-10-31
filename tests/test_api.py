@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app import db, demo, push
+from app import colors, db, demo, push
 from app.main import app
 from tests.conftest import at
 
@@ -75,6 +75,32 @@ def test_start_and_done_from_a_card(client):
     assert client.post("/api/assignments/9000204/done").status_code == 200
     card = next(c for c in client.get("/api/cards").json() if c["assignment_id"] == 9000204)
     assert card["done"]
+
+
+def test_cards_carry_what_prep_docs_show(client):
+    cards = client.get("/api/cards").json()
+    quiz = next(c for c in cards if c["kind"] == "test")
+    assert quiz["color"] in colors.SUBJECT_COLORS
+    assert quiz["blocks"] and quiz["blocks"][0]["status"] == "planned" and not quiz["started"]
+    topics = quiz["misses"]["topics"]
+    assert {"preterite_vs_imperfect", "irregular_preterite"} <= {t["label"] for t in topics}
+    share = [t["wrong"] / t["total"] for t in topics]
+    assert share == sorted(share, reverse=True)  # worst first
+    assert quiz["built_from"]  # the demo's graded rows, by photo name
+
+
+def test_class_colors(client):
+    courses = client.get("/api/courses").json()
+    picked = [c["color"] for c in courses]
+    assert picked == list(colors.SUBJECT_COLORS[: len(courses)])  # palette order, none repeated
+    first = courses[0]["id"]
+    r = client.put(f"/api/courses/{first}/color", json={"color": "#0e9aa7"})
+    assert r.status_code == 200 and r.json()["color"] == "#0E9AA7"
+    assert client.get("/api/courses").json()[0]["color"] == "#0E9AA7"
+    card = next(c for c in client.get("/api/cards").json() if c["course_id"] == first)
+    assert card["color"] == "#0E9AA7"
+    assert client.put(f"/api/courses/{first}/color", json={"color": "#123456"}).status_code == 400
+    assert client.put("/api/courses/1/color", json={"color": "#0E9AA7"}).status_code == 404
 
 
 def test_dashboard(client):

@@ -1,8 +1,8 @@
 // Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v5";
-const SHELL = ["/", "/static/app.js", "/static/style.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
+const CACHE = "start-helper-v6";
+const SHELL = ["/", "/static/app.js", "/static/prepdoc.js", "/static/theme.js", "/static/style.css", "/static/prepdoc.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
 const ICON = "/static/icons/icon-192.png";
 
 self.addEventListener("install", (event) => {

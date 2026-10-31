@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import browser_files, checkin, db, grader, loop, meta_client, prep, push, scheduler, student_model
+from app import browser_files, checkin, colors, db, grader, loop, meta_client, prep, push, scheduler, student_model
 from app.clock import clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
@@ -269,6 +269,26 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
         for b in _pending(conn, ctx, blocks, now)
         if b.status == "missed"
     }
+    sessions: dict[int, list[dict]] = {}  # the prep doc's plan: each assignment's live blocks
+    for b in sorted(blocks, key=lambda b: b.start):
+        if b.status in scheduler.ACTIVE and not (b.status == "started" and b.end <= now):
+            sessions.setdefault(b.assignment_id, []).append(
+                {"id": b.id, "start": b.start.isoformat(), "end": b.end.isoformat(), "status": b.status}
+            )
+    color = colors.course_colors(conn)
+    per_course: dict[int, dict] = {}  # the Dashboard template's misses and graded tests, once per course
+
+    def course_model(course_id: int) -> dict:
+        if course_id not in per_course:
+            tests = [t.title or t.source for t in db.list_graded_tests(conn, course_id)]
+            rows = db.list_test_rows(conn, course_id)
+            per_course[course_id] = {
+                "misses": student_model.misses(conn, course_id),
+                # rows saved before tests had records only know their photo's name
+                "built_from": tests or list(dict.fromkeys(r.source for r in rows if r.source)),
+            }
+        return per_course[course_id]
+
     out = []
     for card in ctx.cards.values():
         a = ctx.assignments.get(card.assignment_id)
@@ -290,6 +310,10 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 "next_block": nb.start.isoformat() if nb else None,
                 "missed": missed.get(a.id),
                 "past_due": bool(a.due_at and a.due_at < now and a.id not in done),
+                "color": color.get(a.course_id, colors.SUBJECT_COLORS[0]),
+                "blocks": sessions.get(a.id, []),
+                "started": any(s["status"] == "started" for s in sessions.get(a.id, [])),
+                **course_model(a.course_id),
             }
         )
     out.sort(key=lambda c: (c["done"], c["due_at"] is None, c["due_at"] or ""))
@@ -589,7 +613,27 @@ def push_test(conn=Depends(get_conn)) -> dict:
 
 @app.get("/api/courses")
 def courses(conn=Depends(get_conn)) -> list[dict]:
-    return [{**c.model_dump(), "notes_medium": prep.notes_medium(conn, c.id)} for c in db.list_courses(conn)]
+    color = colors.course_colors(conn)
+    return [
+        {**c.model_dump(), "notes_medium": prep.notes_medium(conn, c.id), "color": color[c.id]}
+        for c in db.list_courses(conn)
+    ]
+
+
+class ColorIn(BaseModel):
+    color: str
+
+
+@app.put("/api/courses/{course_id}/color")
+def set_course_color(course_id: int, body: ColorIn, conn=Depends(get_conn)) -> dict:
+    """The class's subject color (one of the 8 in colors.SUBJECT_COLORS). Only the look changes,
+    so no card is rebuilt."""
+    if course_id not in {c.id for c in db.list_courses(conn)}:
+        raise HTTPException(404, "No such course")
+    try:
+        return {"course_id": course_id, "color": colors.set_color(conn, course_id, body.color)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/dashboard")

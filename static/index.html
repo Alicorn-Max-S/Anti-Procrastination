@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- The single page: check-in banner, prep cards, the week of blocks, and the dashboard. Plain HTML/JS, no build. -->
+<!-- The single page: check-in banner, assignments and their prep docs, the week of blocks, and the dashboard. Plain HTML/JS, no build. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -9,7 +9,11 @@
     <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="icon" href="/static/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" />
     <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/prepdoc.css" />
   </head>
   <body>
     <header class="topbar">
@@ -59,14 +63,14 @@
     <section id="checkin" class="checkin-list" aria-live="polite"></section>
 
     <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="cards" aria-selected="true">Cards</button>
+      <button role="tab" data-tab="cards" aria-selected="true">Assignments</button>
       <button role="tab" data-tab="week" aria-selected="false">Week</button>
       <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
     </nav>
 
     <main>
       <section id="tab-cards" class="tab-panel">
-        <div id="cards" class="cards"><p class="empty">Loading…</p></div>
+        <div id="cards"><p class="empty">Loading…</p></div>
       </section>
 
       <section id="tab-week" class="tab-panel" hidden>
@@ -77,8 +81,16 @@
       <section id="tab-dashboard" class="tab-panel" hidden>
         <div class="panel">
           <h3>Your courses</h3>
-          <p class="muted small">Where you keep notes for each course. Cards say it once, in the step where you start writing; when it's not set, they don't say where. A change rebuilds that course's cards on the next sync.</p>
+          <p class="muted small">Each course's color, used on all its prep docs, and where you keep notes for it. Cards say where once, in the step where you start writing; when it's not set, they don't say. A notes change rebuilds that course's cards on the next sync.</p>
           <div id="notes-settings" class="notes-settings"></div>
+          <div class="notes-row mode-row">
+            <label for="mode-select">Prep docs: light or dark</label>
+            <select id="mode-select">
+              <option value="system">Same as the system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
         </div>
 
         <div class="panel">
@@ -134,6 +146,8 @@
     </div>
 
     <div id="toast" class="toast" role="status" hidden></div>
+    <script src="/static/theme.js"></script>
+    <script src="/static/prepdoc.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>
