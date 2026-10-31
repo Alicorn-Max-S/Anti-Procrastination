@@ -54,6 +54,53 @@ def test_watch_out_falls_back_to_tests_then_empty(conn):
     assert "pret_imp" in student_model.watch_out_line(conn, 1, "test")
 
 
+def test_pointer_comments_are_not_evidence(conn):
+    pointer = (
+        'Max, you can find the scored rubric and the feedback on the shared Google doc "Unit 1 Assessment - Max." '
+        "Please schedule a conference with me if you'd like to discuss the feedback."
+    )
+    assert not student_model.is_feedback(pointer)
+    assert not student_model.is_feedback("OG: 78.6%")
+    assert not student_model.is_feedback("See https://example.com/notes")
+    assert not student_model.is_feedback("  ")
+    assert student_model.is_feedback("Cite more")
+    assert student_model.is_feedback("Good evidence, but explain why the federal negative mattered.")
+
+    db.save_assignment(
+        conn,
+        Assignment(
+            id=3, course_id=1, name="Essay 2", kind="essay",
+            comments=[
+                SubmissionComment(id=1, assignment_id=3, author="Ms. R", text=pointer),
+                SubmissionComment(id=2, assignment_id=3, author="Ms. R", text="Cite more"),
+            ],
+            rubric=[RubricScore(assignment_id=3, criterion="Evidence", points=2, points_possible=4, comment=pointer)],
+        ),
+    )
+    items = student_model.feedback_evidence(conn, 1)
+    assert [i["text"] for i in items if i["source"] == "comment"] == ["Cite more"]
+    assert [i["teacher_comment"] for i in items if i["source"] == "rubric"] == [""]
+
+
+def test_rubric_losses_are_rounded(conn):
+    db.save_assignment(
+        conn,
+        Assignment(
+            id=4, course_id=1, name="Quick write #1", kind="essay",
+            rubric=[
+                RubricScore(assignment_id=4, criterion="Assertion", points=2.85, points_possible=3),
+                RubricScore(assignment_id=4, criterion="Connections", points=3.75, points_possible=4),
+                RubricScore(assignment_id=4, criterion="Clarity", points=0.3 + 0.6, points_possible=0.9),  # no real loss
+            ],
+        ),
+    )
+    items = {i["criterion"]: i for i in student_model.feedback_evidence(conn, 1)}
+    assert items["Assertion"]["points_lost"] == 0.15
+    assert items["Connections"]["points_lost"] == 0.25
+    assert "Clarity" not in items
+    assert "lost 0.25/4" in student_model.watch_out_line(conn, 1, "essay")  # worst share of marks first
+
+
 def test_evidence_is_per_course(conn):
     db.save_test_rows(conn, rows(course_id=2))
     assert student_model.feedback_evidence(conn, 1) == []

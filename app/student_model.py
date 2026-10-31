@@ -5,10 +5,26 @@ teacher comments from Canvas. Feeds the "watch out for" line on homework cards (
 `past_feedback` / `weak_spots` tools) and picks the weakest cells for test practice sets.
 """
 
+import re
 import sqlite3
 from collections import defaultdict
 
 from app import db
+
+# Teacher comments that say nothing about the work: they point somewhere else ("feedback is on the
+# shared Google doc"), invite a meeting, or are just a number ("OG: 78.6%").
+_NOT_FEEDBACK = re.compile(
+    r"https?://|\bgoogle\s+(?:docs?|drive|classroom)\b|\bshared\s+(?:google\s+)?docs?\b"
+    r"|\b(?:schedule|set up|book|request)\s+(?:a\s+)?(?:conference|meeting)\b"
+    r"|\b(?:come|stop)\s+(?:see|by)\s+me\b|\boffice\s+hours\b"
+    r"|^\W*(?:[a-z]{1,3}\s*:\s*)?[\d.]+\s*(?:%|/\s*[\d.]+)\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_feedback(text: str) -> bool:
+    """True if a teacher comment actually says something about the work."""
+    return bool(text and text.strip()) and not _NOT_FEEDBACK.search(text.strip())
 
 
 def weakness_grid(conn: sqlite3.Connection, course_id: int) -> dict[tuple[str, str], float]:
@@ -84,8 +100,10 @@ def feedback_evidence(
         if kind and a.kind != kind:
             continue
         for r in a.rubric:
-            if r.points is not None and r.points_possible and r.points < r.points_possible:
-                lost = r.points_possible - r.points
+            if r.points is None or not r.points_possible:
+                continue
+            lost = round(r.points_possible - r.points, 2)  # 3 - 2.85 is 0.1499999999999999 in floats
+            if lost > 0:
                 items.append(
                     (
                         lost / r.points_possible,
@@ -95,12 +113,14 @@ def feedback_evidence(
                             "kind": a.kind,
                             "criterion": r.criterion,
                             "points_lost": lost,
-                            "points_possible": r.points_possible,
-                            "teacher_comment": r.comment,
+                            "points_possible": round(r.points_possible, 2),
+                            "teacher_comment": r.comment if is_feedback(r.comment) else "",
                         },
                     )
                 )
         for c in a.comments:
+            if not is_feedback(c.text):
+                continue
             items.append(
                 (0.5, {"source": "comment", "assignment": a.name, "kind": a.kind, "author": c.author, "text": c.text})
             )
