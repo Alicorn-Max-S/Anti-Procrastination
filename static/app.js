@@ -587,6 +587,15 @@ function renderCard(c, askNotes = false) {
       });
       lab.append(box, el("span", null, s));
       li.append(lab);
+      // The teacher's list this step refers to ("the 3 discussion questions"), word for word.
+      for (const list of (c.step_lists || []).filter((x) => x.step === i)) {
+        const more = el("details", "step-list");
+        more.append(el("summary", null, `Show ${list.label}`));
+        const items = el("ol");
+        list.items.forEach((t) => items.append(el("li", null, t)));
+        more.append(items);
+        li.append(more);
+      }
       ol.append(li);
     });
     details.append(ol);
@@ -928,9 +937,113 @@ function renderTests(tests) {
   root.replaceChildren(...tests.slice().reverse().map(testBox));
 }
 
+// ---- connections: the devices pings go to, and what the Chrome extension has done ---------------
+
+// Real time since `iso` (not the demo clock): "3 min ago".
+function ago(iso) {
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  if (min < 48 * 60) return `${Math.round(min / 60)} h ago`;
+  return `${Math.round(min / 1440)} days ago`;
+}
+
+const CARD_USE = {
+  read: "read it",
+  rebuilding: "rebuilds with it on the next sync",
+  not_read: "hasn't read it",
+  no_card: "no card yet",
+};
+
+function connFile(f) {
+  const li = el("li");
+  const a = el("a", null, f.title);
+  a.href = f.url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  li.append(a);
+  const when = fmtDayTime(new Date(f.at));
+  if (f.status === "stored") {
+    li.append(document.createTextNode(` · saved ${when}${f.via === "page" ? " (read from the page view: downloading is off)" : ""}`));
+  } else {
+    li.append(el("span", "lost", ` · couldn't fetch: ${f.reason}`), document.createTextNode(` · tried ${when}`));
+    if (f.detail) li.append(el("div", "conn-sub", f.detail));
+  }
+  if (f.copy_for) li.append(el("div", "conn-sub", `Your Google Assignments copy for ${f.copy_for}`));
+  const used = f.cards.map((c) => `${c.name} (${CARD_USE[c.use] || c.use})`);
+  li.append(el("div", "conn-sub", used.length ? `Cards: ${used.join("; ")}` : "No upcoming card uses it."));
+  return li;
+}
+
+function renderConnections(c) {
+  const ext = c.extension;
+  const extBox = el("div");
+  extBox.append(el("h4", null, "Chrome extension"));
+  let line;
+  if (!ext.seen_at && ext.files.length) {
+    line = el("p", "conn-line warn", "No check-in recorded yet (earlier fetches are below). It checks in every 10 minutes while Chrome is open with the extension on.");
+  } else if (!ext.seen_at) {
+    line = el("p", "conn-line warn", "It hasn't checked in yet. To set it up, follow extension/README.md (the key comes from python -m app.browser_files key).");
+  } else if (ext.recent) {
+    line = el("p", "conn-line ok", `Connected · last check-in ${ago(ext.seen_at)}`);
+  } else {
+    line = el("p", "conn-line warn",
+      `Last check-in ${ago(ext.seen_at)}. It checks in every 10 minutes while Chrome is open, so Chrome is closed or the extension points at another server.`);
+  }
+  extBox.append(line);
+  if (ext.bad_key_at) {
+    extBox.append(el("p", "conn-line warn", `A call ${ago(ext.bad_key_at)} used the wrong key. Paste the key into the extension's settings again.`));
+  }
+  const saved = ext.files.filter((f) => f.status === "stored");
+  const failed = ext.files.filter((f) => f.status !== "stored");
+  if (failed.length) {
+    extBox.append(el("div", "muted small", `Couldn't fetch (${failed.length}), tried again later:`));
+    const ul = el("ul", "conn-list");
+    failed.forEach((f) => ul.append(connFile(f)));
+    extBox.append(ul);
+  }
+  if (saved.length) {
+    extBox.append(el("div", "muted small", `Fetched (${saved.length}):`));
+    const ul = el("ul", "conn-list");
+    saved.forEach((f) => ul.append(connFile(f)));
+    extBox.append(ul);
+  }
+  if (!ext.files.length && ext.seen_at) extBox.append(el("p", "muted small", "No files fetched yet."));
+  if (ext.waiting.length) extBox.append(el("p", "muted small", `Still to fetch (${ext.waiting.length}): ${ext.waiting.join("; ")}`));
+  if (ext.waiting_copies.length) {
+    extBox.append(el("p", "muted small", `Waiting for your Google Assignments copy (open it from Canvas): ${ext.waiting_copies.join("; ")}`));
+  }
+
+  const pushBox = el("div");
+  pushBox.append(el("h4", null, "Devices that get pings"));
+  if (!c.push.devices.length) {
+    pushBox.append(el("p", "conn-line warn", "None yet. On each phone or laptop, open this page and press Turn on notifications."));
+  } else {
+    const ul = el("ul", "conn-list");
+    c.push.devices.forEach((d) => {
+      const li = el("li");
+      li.append(el("strong", null, d.name));
+      if (d.seen_at) li.append(el("span", "conn-sub", ` · last opened the app ${ago(d.seen_at)}`));
+      if (d.warning) li.append(el("div", "conn-warn small", d.warning));
+      ul.append(li);
+    });
+    pushBox.append(ul);
+  }
+  $("#connections").replaceChildren(pushBox, extBox);
+}
+
+async function loadConnections() {
+  try {
+    renderConnections(await api("/api/connections"));
+  } catch (e) {
+    $("#connections").replaceChildren(el("p", "muted small", `Couldn't load: ${e.message}`));
+  }
+}
+
 async function loadDashboard() {
   if (!courses.length) await loadCourses();
   renderNotesSettings();
+  loadConnections();
   const id = $("#course-select").value;
   if (!id) {
     $("#grid").replaceChildren(el("p", "empty", "No courses yet. Sync with Canvas first."));
@@ -1213,6 +1326,23 @@ function sameKey(sub, key) {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
+// What this browser is, so the dashboard can list where pings go: "Chrome on Android".
+function deviceName() {
+  const ua = navigator.userAgent;
+  const os = /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iPhone" : /CrOS/.test(ua) ? "Chromebook"
+    : /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "Mac" : /Linux/.test(ua) ? "Linux" : "";
+  const browser = /Firefox\/|FxiOS/.test(ua) ? "Firefox" : /Edg(A|iOS)?\//.test(ua) ? "Edge" : /SamsungBrowser/.test(ua) ? "Samsung Internet"
+    : /OPR\//.test(ua) ? "Opera" : /Chrome\/|CriOS/.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "A browser";
+  return os ? `${browser} on ${os}` : browser;
+}
+
+// Firefox on Android gets pushes through Mozilla's push server, which hands them to the phone at
+// normal priority whatever urgency Start Helper asks for. Android holds those while the phone
+// sleeps, so a ping shows up when the student next opens the phone. Chrome takes the high urgency.
+const PUSH_LATE_HERE = deviceName() === "Firefox on Android";
+const PUSH_LATE_HELP =
+  "Firefox on Android holds pings while the phone is asleep and shows them when you next open it. For pings on time, open this page in Chrome, add it to the home screen from there, and turn on notifications.";
+
 // Push (works with the page closed): subscribe this browser and hand the subscription to the
 // server. Runs on every load once permission is granted, so a new DB or new keys heal themselves.
 async function syncPush() {
@@ -1227,7 +1357,7 @@ async function syncPush() {
       sub = null;
     }
     sub = sub || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) }));
-    await post("/api/push/subscribe", sub.toJSON());
+    await post("/api/push/subscribe", { ...sub.toJSON(), device: deviceName() });
     pushState = "on";
     pushError = "";
   } catch (e) {
@@ -1247,7 +1377,9 @@ function updateNotify() {
     btn.textContent = pushState === "on" ? "Notifications on · test" : "Notifications on (page open) · test";
     btn.title =
       pushState === "on"
-        ? "Push is set up, so pings arrive even with this page closed. Click to send a test."
+        ? PUSH_LATE_HERE
+          ? `${PUSH_LATE_HELP} Click to send a test.`
+          : "Push is set up, so pings arrive even with this page closed. Click to send a test."
         : `Pings show while this page is open${pushError ? ` (push failed: ${pushError})` : ""}. Click to send a test.`;
   } else if (perm === "denied") {
     btn.textContent = "Notifications blocked";
@@ -1259,11 +1391,13 @@ function updateNotify() {
   if (state) renderCheckin(); // its key includes the permission, so the notice follows it
 }
 
-// Shown above the check-ins when a ping can't reach the student outside this page.
+// Shown above the check-ins when a ping can't reach the student outside this page, or reaches
+// them late.
 function notifyNotice() {
   const perm = notifyPermission();
-  if (perm === "granted") return null;
+  if (perm === "granted" && !PUSH_LATE_HERE) return null;
   const box = el("div", "notice");
+  if (perm === "granted") box.append(el("span", null, PUSH_LATE_HELP));
   if (perm === "denied") box.append(el("span", null, BLOCKED_HELP));
   else if (perm === "unsupported") box.append(el("span", null, "This browser can't show notifications, so keep this page open to see pings."));
   else {
@@ -1296,7 +1430,7 @@ async function testNotification() {
   try {
     if (pushState === "on") {
       const r = await post("/api/push/test");
-      if (r.sent) return toast(`Test sent by push. ${help}`, 9000);
+      if (r.sent) return toast(`Test sent by push. ${PUSH_LATE_HERE ? PUSH_LATE_HELP : help}`, PUSH_LATE_HERE ? 12000 : 9000);
     }
     const shown = await showLocalNotification("Start Helper", { body: "Notifications work.", tag: "test", data: { url: "/" } });
     toast(shown ? `Test notification shown. ${help}` : "The browser refused to show a notification.", 9000);
@@ -1339,9 +1473,22 @@ async function showLocalNotification(title, opts) {
   }
 }
 
-// New pings, misses and reminders found by polling: a notification (push may have shown it
-// already: the same tag replaces it, and only alerts again when push isn't doing it), a toast or
-// chime, and the title. A reminder is a miss whose `notified` count went up.
+// New pings, misses and reminders found by polling: a notification, a toast or chime, and the
+// title. A reminder is a miss whose `notified` count went up. When this browser has push, push
+// brings the notification and the page only steps in if it hasn't come PUSH_GRACE_MS later,
+// saying so, so a page left open never hides a push that doesn't arrive.
+const PUSH_GRACE_MS = 20_000;
+const pushedAt = new Map(); // notification tag -> when sw.js last showed a push for it here
+
+async function pushShown(tag, since) {
+  if ((pushedAt.get(tag) || 0) >= since) return true;
+  try {
+    return (await (await swReady)?.getNotifications({ tag }))?.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function notifyNew() {
   const keyOf = (b) => `${b.id}:${b.status}:${b.notified ?? 0}`;
   if (firstPoll) {
@@ -1354,8 +1501,17 @@ function notifyNew() {
     notified.add(keyOf(b));
     if (notifyPermission() !== "granted") continue;
     const missed = b.status === "missed";
-    const renotify = missed && (b.notified ?? 1) > 1 && pushState !== "on";
-    showLocalNotification(missed ? `Missed start: ${b.name}` : `Time to start: ${b.name}`, notifyOptions(b, renotify));
+    const title = missed ? `Missed start: ${b.name}` : `Time to start: ${b.name}`;
+    if (pushState !== "on") {
+      showLocalNotification(title, notifyOptions(b, missed && (b.notified ?? 1) > 1));
+      continue;
+    }
+    const since = Date.now() - 60_000; // a push can land just before the poll that finds the block
+    setTimeout(async () => {
+      if (!state.checkin.some((x) => x.id === b.id && x.status === b.status) || (await pushShown(`block-${b.id}`, since))) return;
+      const opts = notifyOptions(b, false);
+      showLocalNotification(title, { ...opts, body: `${opts.body} (Push didn't arrive, so the open page is showing this.)` });
+    }, PUSH_GRACE_MS);
   }
   if (fresh.some((b) => b.status === "missed")) chime();
   if (fresh.length && !clockJustMoved) {
@@ -1440,9 +1596,11 @@ function scheduleNextStart() {
   if (Number.isFinite(ms) && ms < 60 * 60_000) startTimer = setTimeout(() => refresh(), Math.max(ms, 0));
 }
 
-// A tap on a notification while the page is open: the service worker focuses it and says which block.
+// A tap on a notification while the page is open: the service worker focuses it and says which
+// block. It also says when it showed a push, so notifyNew doesn't show that one again.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", async (e) => {
+    if (e.data?.type === "pushed") return void pushedAt.set(e.data.tag, Date.now());
     if (e.data?.type === "answered") return refresh(true);
     if (e.data?.type !== "open-block") return;
     await refresh(true);

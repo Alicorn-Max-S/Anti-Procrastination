@@ -4,8 +4,7 @@ Works on the document reader's book pages (reader.Doc.book_pages: printed page n
 two-page scans already split). Page numbers missing on some pages (a chapter opener) are filled in
 from their neighbours. Section headings are short Title Case lines with body text around them;
 whole sections are grouped into sittings of about SITTING_MINUTES, so the card can say
-"Read pp. 177–191: the opening and The Northern Star" with real numbers instead of the teacher's
-"roughly 30pp". If the instructions name a page range ("pp. 181-195"), only that range is planned.
+"Read pp. 177–191 (about 19 min)" with real numbers instead of the teacher's "roughly 30pp". If the instructions name a page range ("pp. 181-195"), only that range is planned.
 """
 
 import math
@@ -224,23 +223,25 @@ def pages_text(first: str, last: str) -> str:
     return f"p. {first}" if first == last else f"pp. {first}–{last}"
 
 
-def sections_text(sections: list[str]) -> str:
-    if len(sections) == 1:
-        return sections[0]
-    if len(sections) == 2:
-        return f"{sections[0]} and {sections[1]}"
-    return f"{sections[0]} through {sections[-1]}"
+_SECOND_CLAUSE = re.compile(r",?\s+and\s+(?:how|why|what|where|when|whether)\s+", re.I)
+
+
+def short_note(note: str, max_words: int = 14) -> str:
+    """A "Look for" note cut back to its first clause when it runs long ("Look for how X, and how
+    Y" keeps "Look for how X.")."""
+    note = " ".join(note.split())
+    if len(note.split()) <= max_words:
+        return note
+    first = _SECOND_CLAUSE.split(note, maxsplit=1)[0].rstrip(" ,;.")
+    return f"{first}." if first != note.rstrip(" ,;.") else note
 
 
 def step(sitting: ReadingSitting, note: str = "") -> str:
-    """"Read pp. 187–198: The Building Pressure through The Invention of Vigilance (4 sections,
-    about 20 min). <note>\""""
-    count = f"{len(sitting.sections)} sections, " if len(sitting.sections) > 2 else ""
-    line = (
-        f"Read {pages_text(sitting.first_page, sitting.last_page)}: {sections_text(sitting.sections)} "
-        f"({count}about {sitting.minutes} min)."
-    )
-    return f"{line} {note.strip()}" if note.strip() else line
+    """"Read pp. 187–198 (about 20 min). Look for ...": pages and minutes, the note kept short.
+    The sections stay in the plan; naming them here made each step two long sentences."""
+    line = f"Read {pages_text(sitting.first_page, sitting.last_page)} (about {sitting.minutes} min)."
+    note = short_note(note)
+    return f"{line} {note}" if note else line
 
 
 def summary_line(p: ReadingPlan) -> str:

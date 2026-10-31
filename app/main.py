@@ -203,7 +203,9 @@ def health(conn=Depends(get_conn)) -> dict:
         "model": meta_client.configured(),
         "push": push.configured(conn),
         "push_devices": len(db.list_subscriptions(conn)),
+        "push_device_names": [d["name"] for d in push.devices(conn)],
         "push_error": json.loads(db.kv_get(conn, "push_error") or "null"),
+        "extension_seen": db.kv_get(conn, "ext_seen"),
         "model_usage": meta_client.usage,
     }
 
@@ -283,6 +285,7 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 "course_id": a.course_id,
                 "notes_medium": prep.notes_medium(conn, a.course_id),
                 "writes": prep.has_writing(card),  # the card may ask where this course's notes live
+                "step_lists": prep.step_lists(card.steps, a.description_html),  # e.g. the discussion questions
                 "done": a.id in done,
                 "next_block": nb.start.isoformat() if nb else None,
                 "missed": missed.get(a.id),
@@ -685,10 +688,22 @@ def delete_row(row_id: int, conn=Depends(get_conn)) -> dict:
 
 
 def extension_conn(x_start_helper_key: str | None = Header(None), conn=Depends(get_conn)):
-    """The request's connection, once the extension's key checks out."""
-    if not browser_files.key_ok(conn, x_start_helper_key):
+    """The request's connection, once the extension's key checks out. Every call counts as a
+    check-in for the dashboard, and so does a wrong key (so the page can say so)."""
+    ok = browser_files.key_ok(conn, x_start_helper_key)
+    browser_files.note_contact(conn, ok)
+    if not ok:
         raise HTTPException(401, "Wrong or missing key: run `python -m app.browser_files key` and paste it into the extension")
     return conn
+
+
+@app.get("/api/connections")
+def connections(conn=Depends(get_conn)) -> dict:
+    """For the dashboard: the devices pings go to, and what the Chrome extension has done."""
+    return {
+        "push": {"configured": push.configured(conn), "devices": push.devices(conn)},
+        "extension": browser_files.status(conn, clock.now()),
+    }
 
 
 @app.get("/api/ext/hello")

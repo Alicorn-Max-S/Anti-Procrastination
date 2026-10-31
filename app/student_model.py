@@ -4,8 +4,9 @@ The topic x question-type grid comes from `test_rows`; the evidence list adds ru
 teacher comments from Canvas. Feeds the "watch out for" line on homework cards (and the model's
 `past_feedback` / `weak_spots` tools) and picks the weakest cells for test practice sets.
 
-Only actionable criticism counts as evidence: grade notes ("OG: 78.6%"), praise ("Very well done")
-and admin notes ("you can find the rubric on the shared doc") are dropped, sentence by sentence.
+Every rubric loss counts. Of teacher comments, only actionable criticism counts: grade notes ("OG:
+78.6%"), praise ("Very well done") and admin notes ("you can find the rubric on the shared doc")
+are dropped, sentence by sentence.
 A watch-out also has to fit the assignment (same kind of work, or a shared rubric criterion);
 no line beats a junk line.
 """
@@ -99,7 +100,6 @@ _CRITICISM = re.compile(
     r"too (?:short|long|general|broad)|clarify|revise|proofread|add (?:a|an|more))\b",
     re.I,
 )
-SMALL_LOSS = 0.2  # a rubric row with no actionable comment counts only when at least this share was lost
 
 # Teacher comments that say nothing about the work: they point somewhere else ("feedback is on the
 # shared Google doc"), invite a meeting, or are just a number ("OG: 78.6%").
@@ -132,7 +132,12 @@ def actionable(text: str) -> str:
 def feedback_evidence(
     conn: sqlite3.Connection, course_id: int, kind: str | None = None, limit: int = 12
 ) -> list[dict]:
-    """Actionable rubric losses, teacher comments and missed test questions in a course, worst first.
+    """Rubric losses, actionable teacher comments and missed test questions in a course, worst
+    first (by the share of points lost).
+
+    Every rubric loss counts, even a small one with no comment: it's still a grade, and the
+    criterion's name says what lost the points (Max's call, Oct 30). Sorting puts tiny losses
+    last, so a watch-out only falls back on one when nothing bigger fits.
 
     An assignment's kind is its card's kind when it has one (the title guess otherwise)."""
     card_kinds = {c.assignment_id: c.kind for c in db.list_cards(conn)}
@@ -148,8 +153,6 @@ def feedback_evidence(
             if lost <= 0:
                 continue
             comment = actionable(r.comment)
-            if lost / r.points_possible < SMALL_LOSS and not comment:
-                continue
             items.append(
                 (
                     lost / r.points_possible,

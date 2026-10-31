@@ -76,11 +76,16 @@ The point is to make starting effortless, not to do the work.
   finding and opening that handout by name, and keep the steps to what any such assignment needs.
 - Readings: when a Reading plan is given and this is a reading, its sittings become the reading
   steps. Then put in steps only what to do besides reading (notes, questions to prepare), at most
-  3, and in reading_notes ONE short note per sitting, in order, on what to look for in THAT
+  3, and in reading_notes ONE note per sitting, in order: the one thing to look for in THAT
   sitting's pages (its sections and their opening words are listed), tied to the teacher's
   questions where they fit. Notes follow the pages, not the questions: a question may come up in
-  several sittings or none. Start each note "Look for" and don't repeat the pages. The first step
-  starts sitting 1 at its first page. Otherwise reading_notes is [].
+  several sittings or none. Each note is one plain clause of at most 12 words that starts "Look
+  for", with no list of names or examples and no pages, e.g. "Look for how Canada became a
+  destination for freedom seekers." The first step starts sitting 1 at its first page. Otherwise
+  reading_notes is [].
+- Lists in the instructions (discussion questions, prompts, problems to answer): a step that uses
+  them names them with their count and the teacher's word for them ("the three discussion
+  questions"). The card shows the list under that step, so never copy the items into a step.
 - Tests: when Unit materials are given and this is a test, every step names a unit document by its
   title and, where the outline lists them, the exact problems, pages or slides, with their topic:
   "Redo Test Review: Vectors problems 10-14 (relative motion)", "Re-read Presentation: Vectors &
@@ -187,6 +192,71 @@ def decide_kind(assignment: Assignment, model_kind: AssignmentKind) -> Assignmen
     if "online_quiz" in assignment.submission_types:
         return "test"
     return model_kind
+
+
+# ---- lists from the instructions, under the step that uses them --------------------------------
+
+_LIST_NOUN = re.compile(r"\b(questions?|prompts?|problems?|tasks?|topics?|requirements?|terms?|parts?)\b", re.I)
+_NUMBERED = re.compile(r"^\(?\d{1,2}[.)]\s+")
+_COUNT_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+_FILLER = set(
+    "the a an and or of to in on for with as at by from this that these those your you be are is it its "
+    "will want each every own into about keep".split()
+)
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]+", text.lower()) if len(w) > 2 and w not in _FILLER}
+
+
+def instruction_lists(description_html: str) -> list[tuple[str, list[str]]]:
+    """Each bulleted or numbered list in the teacher's instructions with the paragraph that
+    introduces it: [("Keep these discussion questions in mind as you read. ...", [q1, q2, q3])]."""
+    text, _, _ = canvas.parse_description(description_html)
+    out: list[tuple[str, list[str]]] = []
+    lead, items = "", []
+    for para in [p.strip() for p in text.split("\n\n") if p.strip()]:
+        if para.startswith("- ") or _NUMBERED.match(para):
+            items.append(_NUMBERED.sub("", para.removeprefix("- ")).strip())
+            continue
+        if len(items) >= 2:
+            out.append((lead, items))
+        lead, items = para, []
+    if len(items) >= 2:
+        out.append((lead, items))
+    return out
+
+
+def step_lists(steps: list[str], description_html: str) -> list[dict]:
+    """The teacher's lists, each under the one step that refers to it, for the card to show
+    there: [{"step": 3, "label": "the 3 discussion questions", "items": [...]}].
+
+    A step refers to a list when it names the same kind of thing as the list's lead-in ("the
+    three discussion questions" for "Keep these discussion questions in mind"). Among those, the
+    step sharing the most words with the lead-in wins, plus a point for saying how many there are."""
+    out = []
+    for lead, items in instruction_lists(description_html):
+        nouns = {m.lower().rstrip("s") for m in _LIST_NOUN.findall(lead)}
+        lead_words = _words(lead)
+        n = len(items)
+        says_count = re.compile(rf"\b(?:{n}|{_COUNT_WORDS[n] if n < len(_COUNT_WORDS) else n})\b", re.I)
+        best, best_score, best_noun = None, 0, ""
+        for i, s in enumerate(steps):
+            found = [m for m in _LIST_NOUN.finditer(s) if m.group(1).lower().rstrip("s") in nouns]
+            if not found:
+                continue
+            score = len(_words(s) & lead_words) + (1 if says_count.search(s) else 0)
+            if score > best_score:
+                best, best_score, best_noun = i, score, s[: found[0].end()]
+        if best is None:
+            continue
+        # "the 3 discussion questions": the noun, with the word before it when the lead-in has it too
+        before = re.findall(r"[A-Za-z]+", best_noun)
+        noun = before[-1].lower()
+        adjective = before[-2].lower() if len(before) > 1 and before[-2].lower() in lead_words else ""
+        label = " ".join(w for w in ["the", str(n), adjective, noun if noun.endswith("s") else noun + "s"] if w)
+        out.append({"step": best, "label": label, "items": items})
+    return out
 
 
 # ---- inputs -----------------------------------------------------------------------------------

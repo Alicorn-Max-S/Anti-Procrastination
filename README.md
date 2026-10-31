@@ -41,6 +41,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 
 - **Desktop:** press *Turn on notifications*; pings show while the page is open.
 - **Phone (push):** needs HTTPS. Generate keys with `python -m app.push`, paste them into `.env`, restart, expose the server (for example `cloudflared tunnel --url http://localhost:8000`), open that URL on the phone, add it to the home screen, and press *Turn on notifications*. iPhone needs iOS 16.4+ and the home-screen app.
+- **Android: use Chrome.** Pings go out at high urgency, so Chrome wakes a sleeping phone for them. Firefox on Android gets them through Mozilla's push server, which doesn't pass the urgency on, so they wait until the phone is next opened. Dashboard → *Notifications and extension* lists each device that gets pings.
 
 ## Fixing things by hand
 

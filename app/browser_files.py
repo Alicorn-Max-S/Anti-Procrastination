@@ -225,6 +225,67 @@ def key_ok(conn: sqlite3.Connection, given: str | None) -> bool:
     return bool(value and given) and hmac.compare_digest(value.encode(), given.encode())
 
 
+def note_contact(conn: sqlite3.Connection, key_was_ok: bool) -> None:
+    """Remember the extension's last call, or the last one with a wrong key, for status()."""
+    db.kv_set(conn, "ext_seen" if key_was_ok else "ext_bad_key", datetime.now(timezone.utc).isoformat())
+
+
+# ---- status for the dashboard -----------------------------------------------------------------
+
+SEEN_RECENTLY = timedelta(minutes=25)  # the extension checks in every 10 minutes while Chrome runs
+
+
+def _card_use(card, file_id: str) -> str:
+    """How one card stands with a fetched file: read | rebuilding | not_read | no_card."""
+    if card is None:
+        return "no_card"
+    if card.stale:
+        return "rebuilding"
+    if any(s.read and gdocs.file_id(s.url) == file_id for s in card.sources):
+        return "read"
+    return "not_read"
+
+
+def status(conn: sqlite3.Connection, now: datetime) -> dict:
+    """What the extension has done, for the dashboard: when it last checked in (and the last call
+    with a wrong key), every file it saved or couldn't get and why, which cards use each one and
+    whether they've been rebuilt with it, and what it still has to fetch."""
+    links = _links(conn, now)
+    names = {a.id: a.name for a in db.list_assignments(conn)}
+    cards = {c.assignment_id: c for c in db.list_cards(conn)}
+    files = []
+    for row in _ensure(conn).execute("SELECT * FROM browser_files ORDER BY updated_at DESC").fetchall():
+        ids = [a.id for a in links[row["file_id"]][3]] if row["file_id"] in links else []
+        if row["assignment_id"] is not None and row["assignment_id"] not in ids:
+            ids.append(row["assignment_id"])
+        files.append({
+            "title": row["title"] or row["url"],
+            "url": row["url"],
+            "status": row["status"],
+            "reason": REASONS.get(row["reason"], row["reason"]) if row["status"] == "failed" else "",
+            "detail": row["detail"],
+            "via": row["via"],
+            "at": row["updated_at"],
+            "copy_for": names.get(row["assignment_id"]) if row["assignment_id"] is not None else None,
+            "cards": [
+                {"assignment_id": aid, "name": names.get(aid, f"Assignment {aid}"), "use": _card_use(cards.get(aid), row["file_id"])}
+                for aid in ids
+            ],
+        })
+    todo = needed(conn, now)
+    seen = db.kv_get(conn, "ext_seen")
+    bad = db.kv_get(conn, "ext_bad_key")
+    real_now = datetime.now(timezone.utc)
+    return {
+        "seen_at": seen,
+        "recent": bool(seen) and real_now - datetime.fromisoformat(seen) < SEEN_RECENTLY,
+        "bad_key_at": bad if bad and (not seen or bad > seen) else None,
+        "files": files,
+        "waiting": [f["name"] or f["url"] for f in todo["files"]],
+        "waiting_copies": [c["name"] for c in todo["copies"]],
+    }
+
+
 # ---- what the extension should fetch ----------------------------------------------------------
 
 

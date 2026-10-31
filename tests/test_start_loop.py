@@ -266,6 +266,35 @@ def test_the_page_can_report_why_push_failed(client):
     assert client.get("/api/health").json()["push_error"] is None
 
 
+def test_pings_go_out_at_high_urgency_and_tidy_ups_at_normal(conn, monkeypatch):
+    # Android only wakes a sleeping phone for a high-urgency push; at normal, the ping waits until
+    # the student next picks up the phone.
+    import pywebpush
+
+    push.ensure_keys(conn)
+    sub = {"endpoint": "https://fcm.googleapis.com/fcm/send/x", "keys": {"p256dh": "p", "auth": "a"}}
+    push.save_subscription(conn, {**sub, "device": "Chrome on Android"})
+    sent = []
+    monkeypatch.setattr(pywebpush, "webpush", lambda subscription, **kw: sent.append((subscription, kw)))
+    assert push.send_ping(conn, "Time to start: Lab 4", "Open the handout.", extra={"kind": "ping", "block_id": 2}) == 1
+    push.send_ping(conn, "Start Helper", "Answered on another device.", extra={"kind": "answered", "clear": ["block-2"]})
+    assert [kw["headers"]["Urgency"] for _, kw in sent] == ["high", "normal"]
+    assert sent[0][0] == sub  # the push service gets the subscription, not our notes on it
+
+
+def test_connections_list_the_devices_that_get_pings(client):
+    client.post("/api/push/subscribe", json={"endpoint": "https://updates.push.services.mozilla.com/wpush/v2/a", "device": "Firefox on Android"})
+    client.post("/api/push/subscribe", json={"endpoint": "https://fcm.googleapis.com/fcm/send/b"})
+    devices = {d["name"]: d for d in client.get("/api/connections").json()["push"]["devices"]}
+    assert "asleep" in devices["Firefox on Android"]["warning"] and devices["Firefox on Android"]["seen_at"]
+    unnamed = next(d for name, d in devices.items() if name.startswith("Chrome"))  # subscribed before names were kept
+    assert unnamed["warning"] == ""
+    assert client.get("/api/health").json()["push_device_names"] == list(devices)
+    client.post("/api/push/subscribe", json={"endpoint": "https://updates.push.services.mozilla.com/wpush/v2/c"})
+    old_firefox = next(d for d in client.get("/api/connections").json()["push"]["devices"] if d["name"].startswith("Firefox,"))
+    assert "device not known yet" in old_firefox["name"] and "If this is Firefox on a phone" in old_firefox["warning"]
+
+
 # ---- the background loop pings on time ---------------------------------------------------------------
 
 

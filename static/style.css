@@ -196,6 +196,16 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
   color: var(--warn);
   font-weight: 600;
 }
+/* Dashboard: devices that get pings, and the Chrome extension's work. */
+.connections { display: grid; gap: 1rem; }
+.connections h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+.conn-line { margin: 0 0 0.4rem; font-weight: 600; }
+.conn-line.ok { color: var(--ok); }
+.conn-line.warn, .conn-warn { color: var(--warn); }
+.conn-list { list-style: none; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.45rem; }
+.conn-list li { font-size: 0.92rem; }
+.conn-list .conn-sub { color: var(--muted); font-size: 0.85rem; }
+.conn-list .lost { color: var(--warn); }
 /* A card whose start was missed, or whose due date passed unsubmitted. */
 .card-alert { border-radius: 8px; padding: 0.65rem 0.85rem; margin: 0 0 0.75rem; border: 1px solid var(--warn); background: var(--warn-soft); }
 .card-alert strong { color: var(--warn); }
@@ -278,6 +288,9 @@ body.modal-open { overflow: hidden; }
 .steps li { margin: 0.2rem 0; }
 .steps label { display: flex; gap: 0.5rem; align-items: baseline; cursor: pointer; }
 .steps input:checked + span { text-decoration: line-through; color: var(--muted); }
+.card .step-list { margin: 0.2rem 0 0.4rem 1.6rem; }
+.card .step-list summary { font-weight: 500; color: var(--accent); font-size: 0.9rem; }
+.step-list ol { padding-left: 1.2rem; margin: 0.3rem 0 0; display: grid; gap: 0.35rem; font-size: 0.92rem; }
 .links { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.5rem 0; }
 .links a {
   font-size: 0.85rem;

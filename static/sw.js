@@ -1,7 +1,7 @@
 // Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v4";
+const CACHE = "start-helper-v5";
 const SHELL = ["/", "/static/app.js", "/static/style.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
 const ICON = "/static/icons/icon-192.png";
 
@@ -68,8 +68,14 @@ self.addEventListener("push", (event) => {
   } catch {
     if (event.data) data.body = event.data.text();
   }
-  event.waitUntil(data.kind === "answered" ? answeredElsewhere(data) : self.registration.showNotification(data.title, options(data)));
+  event.waitUntil(data.kind === "answered" ? answeredElsewhere(data) : show(data));
 });
+
+// An open page stops waiting to show this one itself (app.js notifyNew).
+async function show(data) {
+  await self.registration.showNotification(data.title, options(data));
+  if (data.tag) await tellPages({ type: "pushed", tag: data.tag });
+}
 
 // Answered on another device: swap the notification still up here for a quiet one. A push has to
 // show something or Chrome shows its own, so it only skips that when nothing is up to replace.

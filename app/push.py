@@ -11,8 +11,10 @@ import base64
 import json
 import logging
 import sqlite3
+from urllib.parse import urlparse
 
 from app import db
+from app.clock import clock
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -43,10 +45,43 @@ def ensure_keys(conn: sqlite3.Connection) -> str:
 
 
 def save_subscription(conn: sqlite3.Connection, subscription: dict) -> None:
-    """Store a browser push subscription (the JSON from PushSubscription.toJSON())."""
+    """Store a browser push subscription (the JSON from PushSubscription.toJSON()), with the
+    `device` the page says it is ("Chrome on Android") and when it last sent it (every load)."""
     if not subscription.get("endpoint"):
         raise ValueError("subscription has no endpoint")
-    db.save_subscription(conn, subscription)
+    device = str(subscription.get("device") or "")[:60]
+    db.save_subscription(conn, {**subscription, "device": device, "seen_at": clock.real_now().isoformat()})
+
+
+# The browser behind each push service, by the subscription endpoint's host.
+SERVICES = {
+    "fcm.googleapis.com": "Chrome (or another browser on Google's push)",
+    "push.services.mozilla.com": "Firefox",
+    "notify.windows.com": "Edge",
+    "push.apple.com": "Safari",
+}
+
+LATE = (
+    "Firefox on Android holds pings while the phone is asleep and shows them when you next open "
+    "it. Use Chrome on the phone for pings on time."
+)
+
+
+def devices(conn: sqlite3.Connection) -> list[dict]:
+    """Where pings go, for the dashboard: each browser's name, when it last opened the app, and a
+    `warning` when its pings come late. One that subscribed before the page sent its name is
+    known only by its push service until it opens the app again."""
+    out = []
+    for sub in db.list_subscriptions(conn):
+        name = sub.get("device") or ""
+        warning = LATE if name == "Firefox on Android" else ""
+        if not name:
+            host = urlparse(sub["endpoint"]).hostname or ""
+            browser = next((b for h, b in SERVICES.items() if host == h or host.endswith("." + h)), "A browser")
+            name = f"{browser}, device not known yet (named when it next opens the app)"
+            warning = f"If this is Firefox on a phone: {LATE}" if browser == "Firefox" else ""
+        out.append({"name": name, "seen_at": sub.get("seen_at"), "warning": warning})
+    return out
 
 
 def send_ping(
@@ -64,6 +99,11 @@ def send_ping(
     `extra` rides along in the payload for sw.js: `kind` ("ping" | "missed" | "answered"),
     `block_id` (for the Start now / +15 min buttons), `renotify` (alert again under the same tag)
     and `clear` (the tags an "answered" push replaces).
+
+    Everything the student should see goes out with Urgency: high. At the default (normal),
+    Chrome on Android gets the push only once the phone wakes up, so a ping lands when the
+    student next opens the phone, not at the start time. An "answered" push only tidies up, so it
+    stays normal.
     """
     public_key, private_key = keys(conn)
     if not (public_key and private_key):
@@ -74,18 +114,20 @@ def send_ping(
         log.warning("pywebpush isn't installed; skipping push")
         return 0
     payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag, **(extra or {})})
+    urgency = "normal" if (extra or {}).get("kind") == "answered" else "high"
     sent = 0
     for sub in db.list_subscriptions(conn):
         if skip and sub["endpoint"] == skip:
             continue
         try:
             webpush(
-                sub,
+                {"endpoint": sub["endpoint"], "keys": sub.get("keys", {})},
                 data=payload,
                 vapid_private_key=private_key,
                 vapid_claims={"sub": settings.vapid_contact or "mailto:admin@localhost"},
                 ttl=3600,
                 timeout=10,
+                headers={"Urgency": urgency},
             )
             sent += 1
         except WebPushException as e:

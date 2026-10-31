@@ -106,7 +106,11 @@ def test_watch_out_needs_actionable_feedback_that_fits(conn):
     _past(conn, 12, "lab", rubric=[RubricScore(assignment_id=12, criterion="Units", points=4.85, points_possible=5)])
     lab = Assignment(id=20, course_id=1, name="Lab 5", kind="lab")
     essay = Assignment(id=21, course_id=1, name="Essay 2", kind="essay")
-    assert student_model.watch_out_line(conn, lab) == ""  # grade note, wrong-kind tip, tiny loss: nothing
+    # A tiny loss with no comment still counts (it's a grade on a named criterion); the grade note
+    # and the essay tip don't fit a lab.
+    assert student_model.watch_out_line(conn, lab) == "On Past lab 12 you lost 0.15/5 on “Units”."
+    _past(conn, 14, "lab", rubric=[RubricScore(assignment_id=14, criterion="Data table", points=2, points_possible=5)])
+    assert "Data table" in student_model.watch_out_line(conn, lab)  # a bigger share lost comes first
     assert "cite the page" in student_model.watch_out_line(conn, essay)
     assert "Very well done" not in student_model.watch_out_line(conn, essay)
     shares = Assignment(id=22, course_id=1, name="Lab 6", kind="lab",
@@ -164,9 +168,19 @@ def test_reading_plan_counts_real_pages_and_splits_at_sections():
     assert sum(s.words for s in plan.sittings) == plan.words and plan.minutes == round(plan.words / reading.WPM)
     assert len(plan.sittings) == min(reading.MAX_SITTINGS, 4, -(-plan.minutes // reading.SITTING_MINUTES))
     first = plan.sittings[0]
-    assert reading.step(first).startswith(f"Read pp. 1–{first.last_page}: the opening")
+    assert reading.step(first) == f"Read pp. 1–{first.last_page} (about {first.minutes} min)."
     for a, b in zip(plan.sittings, plan.sittings[1:]):  # sittings follow each other, sharing at most a page
         assert int(b.first_page) - int(a.last_page) in (0, 1)
+
+
+def test_reading_steps_stay_one_short_line():
+    first = reading.plan(chapter(), "chapter.pdf").sittings[0]
+    long_note = ("Look for how the trials show a network built on specialization, and how refugees after "
+                 "the war start making Canada a place presumed free.")
+    assert reading.step(first, long_note).endswith("min). Look for how the trials show a network built on specialization.")
+    assert reading.step(first, "Look for how Canada became free.").endswith("min). Look for how Canada became free.")
+    run_on = "Look for how the trial, the rescue, and the newspapers show why the law made resistance respectable"
+    assert reading.short_note(run_on) == run_on  # no clause to cut at: kept rather than chopped mid-list
 
 
 def test_reading_plan_respects_an_assigned_page_range():
@@ -194,6 +208,36 @@ def test_reading_card_uses_the_plan_for_steps_and_effort(conn, model, monkeypatc
     assert card.steps[-1] == "Write one question for class."
     assert card.effort == ("heavy" if len(plan.sittings) > 1 else card.effort)
     assert "Sitting 1: pp. 1–" in prompts[0]
+
+
+# ---- the teacher's lists under the step that uses them ------------------------------------------
+
+QUESTIONS_HTML = (
+    "<p>Please read this chapter for Monday.</p>"
+    "<p>Keep these discussion questions in mind as you read. Be ready to share evidence and questions of your own.</p>"
+    "<ul><li><em>Was the network organized?</em></li><li>Why did the border matter?</li><li>What did the law change?</li></ul>"
+)
+
+
+def test_discussion_questions_go_under_the_step_that_names_them():
+    steps = [
+        "Read pp. 1–7 (about 20 min). Look for how the network was organized.",
+        "Jot evidence for the three discussion questions in your notebook.",
+        "Draft two questions of your own for Monday.",
+    ]
+    assert prep.step_lists(steps, QUESTIONS_HTML) == [{
+        "step": 1,
+        "label": "the 3 discussion questions",
+        "items": ["Was the network organized?", "Why did the border matter?", "What did the law change?"],
+    }]
+
+
+def test_lists_need_a_step_that_names_the_same_kind_of_thing():
+    assert prep.step_lists(["Read the chapter.", "Write a summary."], QUESTIONS_HTML) == []
+    assert prep.step_lists(["Answer the questions."], "<p>Bring:</p><ul><li>a ruler</li><li>a pencil</li></ul>") == []
+    numbered = "<p>Answer these problems.</p><p>1. Find x.</p><p>2. Find y.</p>"
+    assert prep.instruction_lists(numbered) == [("Answer these problems.", ["Find x.", "Find y."])]
+    assert prep.step_lists(["Do both problems on paper."], numbered)[0]["label"] == "the 2 problems"
 
 
 # ---- notes medium ------------------------------------------------------------------------------

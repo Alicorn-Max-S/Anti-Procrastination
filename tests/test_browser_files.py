@@ -329,3 +329,37 @@ def test_extension_round_trip_over_http(client, seeded):
     r = client.post("/api/ext/files", headers=h, data={"url": COPY, "assignment_id": "5"},
                     files={"file": ("copy.pdf", PDF, "application/pdf")})
     assert r.status_code == 200 and browser_files.copies(5)[0].url == COPY
+
+
+# ---- status on the dashboard -------------------------------------------------------------------
+
+
+def test_status_shows_check_ins_files_and_the_cards_that_use_them(client, seeded):
+    h = {"X-Start-Helper-Key": browser_files.key(seeded)}
+    ext = client.get("/api/connections").json()["extension"]
+    assert ext["seen_at"] is None and not ext["recent"] and ext["files"] == []
+    assert ext["waiting"] == ["Lab handout", "Notes", "Data sheet"] and ext["waiting_copies"] == ["Assignment 5"]
+
+    client.get("/api/ext/needed", headers={"X-Start-Helper-Key": "wrong"})
+    assert client.get("/api/connections").json()["extension"]["bad_key_at"]
+
+    db.save_card(seeded, PrepCard(assignment_id=1, kind="lab", summary="", first_step="", steps=[]))
+    client.post("/api/ext/files", headers=h, data={"url": DOC, "title": "Lab handout"},
+                files={"file": ("Lab handout.pdf", PDF, "application/pdf")})
+    client.post("/api/ext/failed", headers=h, json={"url": SLIDES, "reason": "restricted", "detail": "HTTP 403"})
+    ext = client.get("/api/connections").json()["extension"]
+    assert ext["recent"] and ext["bad_key_at"] is None  # a good call came after the wrong key
+    saved = next(f for f in ext["files"] if f["status"] == "stored")
+    assert saved["title"] == "Lab handout" and saved["via"] == "download"
+    assert saved["cards"] == [
+        {"assignment_id": 1, "name": "Assignment 1", "use": "rebuilding"},  # marked when the file arrived
+        {"assignment_id": 2, "name": "Assignment 2", "use": "no_card"},
+    ]
+    failed = next(f for f in ext["files"] if f["status"] == "failed")
+    assert failed["reason"] == browser_files.REASONS["restricted"] and failed["detail"] == "HTTP 403"
+    assert ext["waiting"] == ["Data sheet"]  # the slides rest a day before the next try
+
+    db.save_card(seeded, PrepCard(assignment_id=1, kind="lab", summary="", first_step="", steps=[],
+                                  sources=[SourceFile(name="Lab handout", url=DOC, read=True)]))  # the sync rebuilt it
+    saved = next(f for f in client.get("/api/connections").json()["extension"]["files"] if f["status"] == "stored")
+    assert saved["cards"][0]["use"] == "read"
