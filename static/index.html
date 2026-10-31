@@ -24,19 +24,36 @@
       </div>
     </header>
 
+    <section id="sync-panel" class="sync-panel" aria-live="polite" hidden>
+      <div class="sync-line">
+        <span id="sync-text"></span>
+        <button id="sync-dismiss" class="ghost small" type="button" hidden>Dismiss</button>
+      </div>
+      <div class="sync-track"><div id="sync-fill" class="sync-fill"></div></div>
+      <ul id="sync-failures" class="sync-failures"></ul>
+    </section>
+
     <section class="clockbar" aria-label="Demo clock">
       <div class="clock-now">
-        <span id="clock-time">--</span>
+        <span id="clock-time" class="clock-time">
+          <span id="clock-day">--</span>
+          <strong id="clock-hm">--</strong>
+          <span id="clock-part" class="clock-part"></span>
+        </span>
         <span id="clock-badge" class="badge sim" hidden>Simulated</span>
+        <span id="clock-next" class="muted small"></span>
       </div>
       <div class="clock-controls">
         <input id="clock-input" type="datetime-local" aria-label="Set the clock to" />
+        <span id="clock-preview" class="clock-preview muted small" aria-live="polite"></span>
         <button type="button" data-clock="set">Set</button>
         <button type="button" data-clock="15">+15m</button>
         <button type="button" data-clock="60">+1h</button>
         <button type="button" data-clock="1440">+1d</button>
+        <button type="button" data-clock="next" class="primary">Jump to next start</button>
         <button type="button" data-clock="reset" class="ghost">Real time</button>
       </div>
+      <div id="clock-msg" class="clock-msg" role="status" hidden></div>
     </section>
 
     <section id="checkin" class="checkin-list" aria-live="polite"></section>
@@ -59,6 +76,12 @@
 
       <section id="tab-dashboard" class="tab-panel" hidden>
         <div class="panel">
+          <h3>Your courses</h3>
+          <p class="muted small">Where you keep notes for each course. Cards say it once, in the step where you start writing; when it's not set, they don't say where. A change rebuilds that course's cards on the next sync.</p>
+          <div id="notes-settings" class="notes-settings"></div>
+        </div>
+
+        <div class="panel">
           <div class="row">
             <label for="course-select">Course</label>
             <select id="course-select"></select>
@@ -71,12 +94,16 @@
 
         <div class="panel">
           <h3>Add a graded test</h3>
-          <p class="muted small">A photo of a marked quiz or test. Each question becomes a row below. Cover other students' names first.</p>
+          <p class="muted small">A photo or scan of a marked quiz or test. It reads the score, each section's subtotal and every question, and checks that they add up. Cover other students' names first.</p>
           <form id="upload-form" class="row wrap">
             <input id="upload-file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" required />
+            <select id="upload-course" aria-label="Course for this test">
+              <option value="">Course: detect from the test</option>
+            </select>
             <button type="submit" class="primary">Read it</button>
             <span id="upload-status" class="muted small"></span>
           </form>
+          <div id="tests" class="graded-tests"></div>
           <div id="rows" class="table-wrap"></div>
         </div>
 
@@ -91,6 +118,14 @@
         </div>
       </section>
     </main>
+
+    <!-- A missed start: sits over the page until it's answered (app.js renderCheckin fills it). -->
+    <div id="miss-modal" class="modal" role="alertdialog" aria-modal="true" aria-labelledby="miss-modal-title" hidden>
+      <div class="modal-box">
+        <h2 id="miss-modal-title" class="modal-title">Missed start</h2>
+        <div id="miss-modal-list" class="modal-list"></div>
+      </div>
+    </div>
 
     <div id="toast" class="toast" role="status" hidden></div>
     <script src="/static/app.js"></script>

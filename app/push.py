@@ -1,8 +1,10 @@
 """Web push: stores browser subscriptions and sends notifications with pywebpush/VAPID.
 
-Phone push needs HTTPS (Cloudflare tunnel or small server). Without VAPID keys, or without
-pywebpush installed, sending is a no-op and the page's own desktop notifications are the fallback.
-Generate keys once with `python -m app.push` and paste them into .env.
+Phone push needs HTTPS (Cloudflare tunnel or small server); desktop Chrome and Edge also accept
+http://localhost. VAPID keys come from .env when set there (`python -m app.push` prints a pair);
+otherwise `ensure_keys` makes a pair the first time the student turns notifications on and keeps
+it in the kv table. Without keys, or without pywebpush installed, sending is a no-op and the
+page's own desktop notifications are the fallback.
 """
 
 import base64
@@ -16,8 +18,28 @@ from app.config import settings
 log = logging.getLogger(__name__)
 
 
-def configured() -> bool:
-    return bool(settings.vapid_public_key and settings.vapid_private_key)
+def keys(conn: sqlite3.Connection) -> tuple[str, str]:
+    """(public, private) VAPID keys: the .env pair if set, else the one ensure_keys stored."""
+    if settings.vapid_public_key and settings.vapid_private_key:
+        return settings.vapid_public_key, settings.vapid_private_key
+    return db.kv_get(conn, "vapid_public_key") or "", db.kv_get(conn, "vapid_private_key") or ""
+
+
+def configured(conn: sqlite3.Connection) -> bool:
+    return all(keys(conn))
+
+
+def ensure_keys(conn: sqlite3.Connection) -> str:
+    """The public key, generating and storing a pair first if there is none. "" if that fails."""
+    if not configured(conn):
+        try:
+            public, private = generate_keys()
+        except ImportError:
+            log.warning("pywebpush isn't installed; push stays off")
+            return ""
+        db.kv_set(conn, "vapid_public_key", public)
+        db.kv_set(conn, "vapid_private_key", private)
+    return keys(conn)[0]
 
 
 def save_subscription(conn: sqlite3.Connection, subscription: dict) -> None:
@@ -27,23 +49,40 @@ def save_subscription(conn: sqlite3.Connection, subscription: dict) -> None:
     db.save_subscription(conn, subscription)
 
 
-def send_ping(conn: sqlite3.Connection, title: str, body: str, url: str = "/", tag: str = "") -> int:
-    """Send a push notification to all stored subscriptions. Returns how many went out."""
-    if not configured():
+def send_ping(
+    conn: sqlite3.Connection,
+    title: str,
+    body: str,
+    url: str = "/",
+    tag: str = "",
+    extra: dict | None = None,
+    skip: str = "",
+) -> int:
+    """Send a push notification to all stored subscriptions except the one whose endpoint is
+    `skip`. Returns how many went out.
+
+    `extra` rides along in the payload for sw.js: `kind` ("ping" | "missed" | "answered"),
+    `block_id` (for the Start now / +15 min buttons), `renotify` (alert again under the same tag)
+    and `clear` (the tags an "answered" push replaces).
+    """
+    public_key, private_key = keys(conn)
+    if not (public_key and private_key):
         return 0
     try:
         from pywebpush import WebPushException, webpush
     except ImportError:
         log.warning("pywebpush isn't installed; skipping push")
         return 0
-    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag})
+    payload = json.dumps({"title": title, "body": body, "url": url, "tag": tag, **(extra or {})})
     sent = 0
     for sub in db.list_subscriptions(conn):
+        if skip and sub["endpoint"] == skip:
+            continue
         try:
             webpush(
                 sub,
                 data=payload,
-                vapid_private_key=settings.vapid_private_key,
+                vapid_private_key=private_key,
                 vapid_claims={"sub": settings.vapid_contact or "mailto:admin@localhost"},
                 ttl=3600,
                 timeout=10,

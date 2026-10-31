@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app import db, gdocs
+from app import db, gdocs, web
 from app.clock import clock
 from app.config import settings
 
@@ -22,6 +22,12 @@ def at(day: int, hour: int, minute: int = 0) -> datetime:
 def no_google(monkeypatch):
     """Google file fetches answer 404 unless a test installs its own fake."""
     monkeypatch.setattr(gdocs, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
+
+
+@pytest.fixture(autouse=True)
+def no_web(monkeypatch):
+    """Web article fetches answer 404 unless a test installs its own fake."""
+    monkeypatch.setattr(web, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(404))))
 
 
 @pytest.fixture(autouse=True)

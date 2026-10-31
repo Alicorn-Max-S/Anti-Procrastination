@@ -6,45 +6,99 @@ with structured output while letting it call `past_feedback` and `weak_spots` (t
 keep only links that really came from Canvas, add a practice set for tests, save. Without a
 model key, or if the call fails, a plain template card is saved instead.
 
+Code, not the model, has the last word on what it can check: the kind (a Canvas quiz is always a
+test), the watch-out (its quotes must appear in actionable past feedback that fits this
+assignment, or in the instructions), and a reading's length and stopping points (reading.py,
+from the file's text). Where the student keeps notes is a per-course setting ("paper" or "doc");
+unset, cards say "your notes".
+
 Google Assignments (an LTI tool) makes the student's copy of the doc only when it's opened from
 Canvas, so there's nothing to fetch: the card's link and first step send the student there.
 """
 
 import logging
+import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app import canvas, convert, db, gdocs, meta_client, practice, student_model
+from app import canvas, db, materials, meta_client, practice, reader, reading, student_model
 from app.clock import as_local
 from app.config import settings
-from app.meta_client import MetaError, Tool
-from app.models import ASSIGNMENT_KINDS, Assignment, AssignmentKind, Effort, Link, PrepCard
+from app.meta_client import MetaError
+from app.models import (
+    Assignment,
+    AssignmentKind,
+    Effort,
+    Link,
+    PrepCard,
+    ReadingPlan,
+    SourceFile,
+)
+from app.progress import Progress
 
 log = logging.getLogger(__name__)
 
-MAX_ATTACHMENTS = 3
+CARD_WORKERS = 5  # model cards built at once during a sync (= the default MAX_CARDS_PER_SYNC)
 
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
 The point is to make starting effortless, not to do the work.
 
-- first_step: ONE concrete action that takes about two minutes and needs no decisions, naming the
-  exact file, page or problem (e.g. "Open the Lab 4 handout and copy the three research questions
-  into a new doc titled 'Lab 4'"). Never "review the material" or "get started".
+- kind: decide it from the instructions and files. The title guess you're given is only a hint
+  and is often wrong. test only when the student will sit a quiz, test or exam for this item.
+  Practice problems, review sheets, study guides and corrections are problem_set, even when the
+  title says test or exam. Otherwise lab, reading, essay, or other.
+- first_step: ONE physical action that takes about two minutes and needs no thinking: opening,
+  finding, copying, labeling, or reading a few lines. Name the exact file, page, problem or
+  section. Make it the first real piece of the work, shrunk: "Open the Lab 4 handout and read
+  step 1 of the procedure", "Write out problem 1 of the worksheet", "Read the first stanza of
+  'A Litany for Survival'". Copying titles or headings is a ritual, not a start. It must not ask
+  the student to solve, answer, analyze, summarize or decide anything. Never "review the
+  material" or "get started".
+- Where the student writes: follow the Notes line in the prompt, and name the place at most once
+  on the whole card, in the first step that has the student write. Never attach it to watching,
+  reading, opening, checking or bringing ("watch the video in your notes" is nonsense).
+- Files and links: call them by what they are ("the answer key", "the lab handout", "the chapter
+  PDF", "the Khan Academy video"), or by their title when it is a real name ("Test Review:
+  Vectors"). Never paste link text that is a phrase ("KEY is provided here", "click here") into a
+  sentence.
 - steps: 3 to 7 short imperative steps in order, specific to this assignment, covering everything
   the rubric and instructions ask for.
 - summary: one or two sentences on what has to be turned in.
 - links: only links from the list you were given, with the URL copied exactly. Never invent URLs.
-- If the real instructions are in a linked file you couldn't read, don't guess its contents:
-  make the first step opening that file by name and doing the first thing it asks.
-- watch_out: call past_feedback first. Then write ONE sentence naming a specific past mistake that
-  is relevant to this assignment, quoting the teacher's words when there are any. Use "" if
-  nothing relevant comes back. Never make up feedback.
+- Only name specifics (headings, data tables, problem numbers, page numbers, materials,
+  procedures) that appear in the instructions or files you can read. If the instructions aren't
+  available, or are in a file you couldn't read, say so in the summary, make the first step
+  finding and opening that handout by name, and keep the steps to what any such assignment needs.
+- Readings: when a Reading plan is given and this is a reading, its sittings become the reading
+  steps. Then put in steps only what to do besides reading (notes, questions to prepare), at most
+  3, and in reading_notes ONE short note per sitting, in order, on what to look for in THAT
+  sitting's pages (its sections and their opening words are listed), tied to the teacher's
+  questions where they fit. Notes follow the pages, not the questions: a question may come up in
+  several sittings or none. Start each note "Look for" and don't repeat the pages. The first step
+  starts sitting 1 at its first page. Otherwise reading_notes is [].
+- Tests: when Unit materials are given and this is a test, every step names a unit document by its
+  title and, where the outline lists them, the exact problems, pages or slides, with their topic:
+  "Redo Test Review: Vectors problems 10-14 (relative motion)", "Re-read Presentation: Vectors &
+  Relative Motion (Part 2) pp. 9-15 (relative velocity examples)", "Do the practice set below,
+  then check what you missed against Test Review: Vectors KEY". Weight the steps toward the
+  student's weak topics in Past feedback. Never "gather your notes", "review the material" or
+  "recheck the assignment".
+- watch_out: ONE sentence naming a specific mistake from the Past feedback list that this
+  assignment could repeat: an item from the same kind of work, or one sharing a rubric criterion.
+  Quote the teacher's criticism in double quotes. Never use praise, grades, or notes about where
+  to find feedback. If nothing fits, quote instead the one requirement or warning in the teacher's
+  instructions or handout that is easiest to miss and would cost points (showing every step,
+  units, a length or format rule, what must be turned in), e.g. 'The handout asks you to "show
+  all of your steps" for every calculation.' Never generic advice. If there is none, "". Quote
+  exactly; never invent or reword anything inside quotes.
 - effort: light (under 45 minutes), medium, or heavy (over 2 hours or more than one sitting).
-- kind: lab, reading, problem_set, essay, test, or other.
+- Answer keys (listed in the prompt) are only for checking finished work. A step may say to check
+  against the key by name; never put its answers, values or worked steps anywhere on the card.
 Never write any part of the answer or solve problems for the student."""
 
 
@@ -58,6 +112,81 @@ class CardDraft(BaseModel):
     links: list[Link]
     watch_out: str
     effort: Effort
+    reading_notes: list[str] = Field(default_factory=list)  # one per reading sitting
+
+
+# ---- per-course notes setting -----------------------------------------------------------------
+
+NOTES_MEDIA = ("paper", "doc")
+
+_NOTES_LINE = {
+    "paper": "on paper. Where writing first happens, say 'in your notebook' once; never a doc or a file.",
+    "doc": "in a doc on the computer. Where writing first happens, say 'in your notes doc' once; never paper.",
+    None: "not set. Don't say where to write (no 'in your notes', doc or paper) unless the instructions say; "
+    "just say what to write.",
+}
+
+# "in your notes", "to your notebook", "in your notes doc": where the student writes
+_PLACE = re.compile(r",?\s+(?:in|into|to|on) your (?:notes(?: doc)?|notebook)\b", re.I)
+_WRITES = re.compile(
+    r"^\W*(?:write|copy|jot|note|list|draw|record|answer|solve|do|redo|rework|work|make|label|sketch|"
+    r"paraphrase|summari[sz]e|outline|draft|fill|take|calculate|show|finish|complete|set up)\b",
+    re.I,
+)
+
+
+def _place_once(lines: list[str], allowed: int) -> list[str]:
+    """Keep "in your notes" (or notebook / notes doc) on at most `allowed` lines, and only on a line
+    that starts with writing and doesn't already name the notes ("from your notes in your notes")."""
+    out = []
+    for line in lines:
+        def keep(m: re.Match) -> str:
+            nonlocal allowed
+            rest = (line[: m.start()] + line[m.end():]).lower()
+            if allowed and _WRITES.match(line) and "your notes" not in rest and "your notebook" not in rest:
+                allowed -= 1
+                return m.group(0)
+            return ""
+        out.append(_PLACE.sub(keep, line))
+    return out
+
+
+def notes_medium(conn: sqlite3.Connection, course_id: int) -> str | None:
+    """'paper', 'doc', or None when the student hasn't said."""
+    value = db.kv_get(conn, f"notes_medium:{course_id}")
+    return value if value in NOTES_MEDIA else None
+
+
+def set_notes_medium(conn: sqlite3.Connection, course_id: int, medium: str | None) -> None:
+    if medium is not None and medium not in NOTES_MEDIA:
+        raise ValueError(f"notes medium must be one of {NOTES_MEDIA} or null")
+    db.kv_set(conn, f"notes_medium:{course_id}", medium)
+
+
+def mark_course_stale(conn: sqlite3.Connection, course_id: int, now: datetime) -> list[int]:
+    """After the course's notes setting changes: mark its upcoming cards stale so the next sync
+    rebuilds them once (build_all_missing). Returns the ids of the cards that will be rebuilt."""
+    due = {a.id for a in upcoming(db.list_assignments(conn), now, settings.card_horizon_days) if a.course_id == course_id}
+    rebuilt = []
+    for card in db.list_cards(conn):
+        if card.assignment_id in due:
+            if not card.stale:
+                db.save_card(conn, card.model_copy(update={"stale": True}))
+            rebuilt.append(card.assignment_id)
+    return rebuilt
+
+
+def has_writing(card: PrepCard) -> bool:
+    """Whether the card has the student write something (so it's worth asking where notes live)."""
+    return any(_WRITES.match(s) for s in [card.first_step, *card.steps])
+
+
+def decide_kind(assignment: Assignment, model_kind: AssignmentKind) -> AssignmentKind:
+    """The card's kind: a Canvas quiz is a test; otherwise the model's read of the instructions
+    (the title guess was only a hint in its prompt)."""
+    if "online_quiz" in assignment.submission_types:
+        return "test"
+    return model_kind
 
 
 # ---- inputs -----------------------------------------------------------------------------------
@@ -95,45 +224,56 @@ def known_links(assignment: Assignment) -> list[Link]:
     return links
 
 
-def _attachments(assignment: Assignment) -> tuple[list[Path], list[Link]]:
-    """Download and convert up to MAX_ATTACHMENTS files: Canvas files linked in the description,
-    then Google files shared publicly. Returns (files the model can read, Google links that
-    couldn't be opened). Failures are skipped, not fatal."""
-    folder = Path(settings.files_dir) / "attachments" / str(assignment.id)
-    out: list[Path] = []
+def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile], list[reader.Doc]]:
+    """Read every file and doc the description points at (reader.py: Canvas files, Google files
+    linked or embedded, Canvas pages, web articles) and pick the ones to send the model.
 
-    def keep(path: Path | None) -> bool:
-        readable = convert.model_readable(path) if path else None
-        if readable and readable not in out:
-            out.append(readable)
-        return readable is not None
-
-    if settings.canvas_base_url and settings.canvas_token:
-        for endpoint in assignment.attachment_urls[:MAX_ATTACHMENTS]:
-            try:
-                keep(canvas.download_file(endpoint, folder))
-            except httpx.HTTPError as e:
-                log.warning("attachment %s failed: %s", endpoint, e)
-
-    unreadable: list[Link] = []
-    _, links, _ = canvas.parse_description(assignment.description_html)
-    for link in links:
-        if not gdocs.is_google_file(link.url) or len(out) >= MAX_ATTACHMENTS:
-            continue
-        try:
-            ok = keep(gdocs.download(link.url, folder))
-        except httpx.HTTPError as e:
-            log.warning("google file %s failed: %s", link.url, e)
-            ok = False
-        if not ok:
-            unreadable.append(link)
-    return out, unreadable
+    Returns (files for the model, one SourceFile per document tried, the Docs sent). The read=True
+    sources and the Docs line up, in order, with the files; the other sources say why they couldn't
+    be opened or weren't sent. A Doc keeps its book pages even when its file went as text. Scans
+    that get sent are transcribed first (once per file), so they have text like any other doc."""
+    docs = reader.read_scans(reader.read_assignment(assignment))
+    files, sent = reader.model_files(docs)
+    sent_ids = {id(d) for d in sent}
+    sources = []
+    for d in docs:
+        if id(d) in sent_ids:
+            sources.append(d.source().model_copy(update={"read": True, "reason": reader.read_note(d)}))
+        elif d.readable:
+            sources.append(d.source().model_copy(update={"read": False, "reason": "not sent: too many files for one card"}))
+        else:
+            sources.append(d.source())
+    return files, sources, sent
 
 
 def _due_text(assignment: Assignment) -> str:
     if not assignment.due_at:
         return "no due date"
     return as_local(assignment.due_at).strftime("%A %b %d, %I:%M %p")
+
+
+# "KEY: Unit Vectors Practice", "Test Review KEY", "Key - Lab 3", "Answer Key", "Answers to the
+# worksheet". "Key" inside a title isn't enough ("Key Concepts"), nor is "solutions" (chemistry).
+_KEY_WORD = re.compile(r"\bKEY\b|(?i:^\s*key\s*[:\-–])")
+_ANSWER_KEY = re.compile(r"\banswer\s+(?:key|sheet)s?\b|\banswers\s+(?:to|for)\b|\bsolutions?\s+(?:key|manual|to|for)\b", re.I)
+
+
+def is_answer_key(name: str) -> bool:
+    """Whether a file's name says it's an answer key (the card may point at it, never copy from it)."""
+    return bool(_KEY_WORD.search(name) or _ANSWER_KEY.search(name))
+
+
+_PHRASE = re.compile(r"\b(?:here|is|are|provided|click|this|these|link|below|above|attached)\b", re.I)
+
+
+def _name_keys(lines: list[str], labels: list[str]) -> list[str]:
+    """Replace an answer key's link text, when it is a phrase ("KEY is provided here"), with what it
+    is: "check against the KEY is provided here" -> "check against the answer key"."""
+    phrases = sorted((l for l in labels if is_answer_key(l) and _PHRASE.search(l)), key=len, reverse=True)
+    for label in phrases:
+        pattern = re.compile(r"\b(?:the\s+)?" + re.escape(label), re.I)
+        lines = [pattern.sub("the answer key", line) for line in lines]
+    return lines
 
 
 def _prompt(
@@ -143,74 +283,102 @@ def _prompt(
     links: list[Link],
     files: list[Path],
     unreadable: list[Link] | None = None,
+    notes: str | None = None,
+    plan: ReadingPlan | None = None,
+    feedback: str = "(none)",
+    read_names: list[str] | None = None,
+    unit: str = "",
 ) -> str:
     rubric = "\n".join(
         f"- {r.criterion} ({r.points_possible:g} pts)" if r.points_possible is not None else f"- {r.criterion}"
         for r in assignment.rubric
     )
-    link_lines = "\n".join(f"- {l.label}: {l.url}" for l in links) or "(none)"
-    blocked = "\n".join(f"- {l.label}" for l in unreadable or []) or "(none)"
+    key = lambda label: " [the answer key]" if is_answer_key(label) else ""
+    link_lines = "\n".join(f"- {l.label}{key(l.label)}: {l.url}" for l in links) or "(none)"
+    blocked = "\n".join(f"- {l.label}{key(l.label)}" for l in unreadable or []) or "(none)"
+    if not text.strip() and not files:
+        names = ", ".join(f"'{l.label}'" for l in unreadable or [])
+        seen = (
+            "NO. The description is empty and no file could be read"
+            + (f" (the handout is probably {names}, on the Canvas assignment page)" if names else "")
+            + ". Don't guess what the instructions say."
+        )
+    else:
+        seen = "yes"
+    reading_plan = (
+        "Reading plan (worked out from the file's text; use only if this is a reading):\n" + reading.prompt_block(plan)
+        if plan
+        else "Reading plan: (none)"
+    )
+    read_names = read_names or [f.name for f in files]
+    keys = [n for n in read_names if is_answer_key(n)]
     return f"""Course: {course_name}
 Assignment: {assignment.name}
-Kind (guessed from the title): {assignment.kind}
+Kind guessed from the title only (often wrong): {assignment.kind}
 Due: {_due_text(assignment)}
 Points: {assignment.points_possible if assignment.points_possible is not None else "unknown"}
 How it's turned in: {turn_in(assignment)}
+Notes for this course: {_NOTES_LINE[notes]}
 Rubric criteria:
 {rubric or "(no rubric)"}
 
 Links you may use:
 {link_lines}
 
-Attached files (you can read these): {", ".join(f.name for f in files) or "(none)"}
-Linked files you can't read (shared only inside the school):
+Attached files (you can read these, in this order): {"; ".join(read_names) or "(none)"}
+Answer keys among them (for checking finished work only; copy nothing from them): {"; ".join(keys) or "(none)"}
+Linked files you can't read:
 {blocked}
+Instructions available: {seen}
+
+{reading_plan}
+
+Unit materials for this test (use only if this is a test):
+{unit or "(none)"}
+
+Past feedback in this course (actionable criticism only; [kind] is the kind of work it came from):
+{feedback}
 
 Instructions from the teacher:
-{text or "(no description; work from the title and any attached files)"}"""
+{text or "(no description)"}"""
 
 
-def _tools(conn: sqlite3.Connection, assignment: Assignment) -> list[Tool]:
-    course_id = assignment.course_id
-    return [
-        Tool(
-            name="past_feedback",
-            description=(
-                "This student's graded work in the same course: rubric criteria where they lost "
-                "points (with the teacher's comment), teacher comments, and missed test questions. "
-                "Filter by assignment kind, or 'any'."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {"kind": {"type": "string", "enum": [*ASSIGNMENT_KINDS, "any"]}},
-                "required": ["kind"],
-                "additionalProperties": False,
-            },
-            fn=lambda args: student_model.feedback_evidence(
-                conn, course_id, None if args.get("kind") in (None, "any") else args["kind"]
-            ),
-        ),
-        Tool(
-            name="weak_spots",
-            description=(
-                "Topic and question-type combinations where this student loses the most marks on "
-                "graded tests in this course, with example missed questions."
-            ),
-            parameters={"type": "object", "properties": {}, "required": [], "additionalProperties": False},
-            fn=lambda args: student_model.weakest_cells(conn, course_id, n=5),
-        ),
-    ]
+def _feedback_block(conn: sqlite3.Connection, assignment: Assignment) -> str:
+    """This student's actionable past feedback in the course, for the prompt. Sent up front rather
+    than as a tool: a tool call costs a second round with every file re-sent."""
+    lines = []
+    for item in student_model.feedback_evidence(conn, assignment.course_id, limit=12):
+        if item.get("assignment_id") == assignment.id:
+            continue
+        if item["source"] == "rubric":
+            said = f' Teacher: "{item["teacher_comment"]}"' if item["teacher_comment"] else ""
+            lines.append(
+                f"- [{item['kind']}] {item['assignment']}, rubric \"{item['criterion']}\": lost "
+                f"{item['points_lost']:g}/{item['points_possible']:g}.{said}"
+            )
+        elif item["source"] == "comment":
+            lines.append(f"- [{item['kind']}] {item['assignment']}, {item['author'] or 'teacher'}: \"{item['text']}\"")
+        else:
+            note = f' Teacher: "{item["teacher_note"]}"' if item["teacher_note"] else ""
+            lines.append(f"- [test] graded test, {item['topic']} / {item['qtype']}: missed \"{item['question']}\".{note}")
+    return "\n".join(lines) or "(none)"
 
 
 # ---- cards ------------------------------------------------------------------------------------
 
 _FALLBACK_FIRST_STEP: dict[str, str] = {
-    "lab": "Open the lab handout and copy its section headings into a new doc titled '{name}'.",
-    "reading": "Open the reading and read only the first page, then write one sentence on what it's saying.",
-    "problem_set": "Open the problem set and copy problem 1 onto paper, underlining what it asks for.",
-    "essay": "Open a new doc titled '{name}' and write a one-sentence answer to the prompt, even a rough one.",
-    "test": "Write down, from memory, the three topics you think this test covers.",
-    "other": "Open the assignment page and write down, in one line, what you have to turn in.",
+    "lab": "Open the {name} handout and read step 1 of the procedure.",
+    "reading": "Open the reading to its first page and read just the first two paragraphs.",
+    "problem_set": "Open the problem set and copy problem 1 to {where}.",
+    "essay": "Copy the essay prompt, word for word, to {where}.",
+    "test": "Write '{name}' at {where}, then open your class notes for this unit to the first page.",
+    "other": "Open the assignment on Canvas and copy its first instruction to {where}.",
+}
+
+_WHERE = {
+    "paper": "the top of a fresh page in your notebook, titled '{name}'",
+    "doc": "a new doc titled '{name}'",
+    None: "the top of a blank page",
 }
 
 _FALLBACK_STEPS: dict[str, list[str]] = {
@@ -227,7 +395,12 @@ def fallback_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     """A template card from the assignment's kind, used when the model isn't available."""
     text, _, _ = canvas.parse_description(assignment.description_html)
     summary = " ".join(text.split())[:240] or assignment.name
-    first_step = _FALLBACK_FIRST_STEP[assignment.kind].format(name=assignment.name)
+    where = _WHERE[notes_medium(conn, assignment.course_id)].format(name=assignment.name)
+    first_step = _FALLBACK_FIRST_STEP[assignment.kind].format(name=assignment.name, where=where)
+    seen = bool(text.strip())
+    if not seen:
+        summary = f"{assignment.name}: the instructions weren't readable here, so this card is from the title only."
+        first_step = "Open the assignment on Canvas and find the handout or instructions on that page, then open them."
     if uses_google_assignments(assignment):
         first_step = "Open the assignment on Canvas and click through to Google Assignments to open your copy of the doc."
     return PrepCard(
@@ -237,48 +410,131 @@ def fallback_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
         first_step=first_step,
         steps=_FALLBACK_STEPS[assignment.kind],
         links=known_links(assignment),
-        watch_out=student_model.watch_out_line(conn, assignment.course_id, assignment.kind),
+        watch_out=student_model.watch_out_line(conn, assignment),
         generated_by="fallback",
+        instructions_seen=seen,
     )
+
+
+def _reading_plan(docs: list[reader.Doc], text: str) -> ReadingPlan | None:
+    """A plan for the longest readable document, limited to a page range the instructions name."""
+    readable = [d for d in docs if d.readable and d.book_pages]
+    if not readable:
+        return None
+    doc = max(readable, key=lambda d: sum(len(p.text.split()) for p in d.book_pages))
+    return reading.plan(doc.book_pages, doc.name, reading.page_range(text))
+
+
+_READ_PAGES = re.compile(r"^\s*read\b.*\bpp?\.\s*\d", re.I)  # "Read pp. 177-187 ..."
+_NOTE_PREFIX = re.compile(r"^\s*(?:sitting\s*\d+\s*)?(?:\(?pp?\.\s*[\d\s–-]+\)?\s*)?[:.\-–]\s*", re.I)  # "Sitting 1 pp. 177-187: "
+
+
+def _reading_effort(plan: ReadingPlan) -> Effort:
+    if len(plan.sittings) > 1 or plan.minutes > 120:
+        return "heavy"
+    return "light" if plan.minutes < 45 else "medium"
+
+
+def _watch_out(
+    conn: sqlite3.Connection, assignment: Assignment, kind: str, line: str, text: str, handouts: list[str] = ()
+) -> str:
+    """The model's line if its quotes check out against fitting evidence, the instructions or the
+    files it read (a requirement easy to miss), else the student model's own line (which may be '')."""
+    evidence = student_model.relevant_evidence(conn, assignment, kind, limit=20)
+    sources = [text, *handouts] + [
+        item[key] for item in evidence
+        for key in ("text", "teacher_comment", "criterion", "teacher_note", "question")
+        if item.get(key)
+    ]
+    if line and student_model.quote_checked(line, sources):
+        return line
+    if line:
+        log.info("dropped watch-out for %s (quote not found in fitting feedback): %s", assignment.id, line)
+    return student_model.watch_out_line(conn, assignment, kind)
+
+
+def _unit_outline(conn: sqlite3.Connection, assignment: Assignment) -> str:
+    """For a test (by its title guess or a Canvas quiz): the unit's documents and what's in each,
+    so the steps can name exact problems and slides. Answer keys keep only their title line."""
+    if assignment.kind != "test" and "online_quiz" not in assignment.submission_types:
+        return ""
+    try:
+        unit, docs = materials.unit_outline(conn, assignment)
+    except Exception as e:  # Canvas, Google or a file read failed: the card goes without the outline
+        log.warning("unit outline for %s failed: %s", assignment.id, e)
+        return ""
+    docs = [d.model_copy(update={"parts": []}) if d.answer_key else d for d in docs]
+    return materials.outline_text(unit, docs) if docs else ""
 
 
 def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     courses = {c.id: c.name for c in db.list_courses(conn)}
     text, _, _ = canvas.parse_description(assignment.description_html)
     links = known_links(assignment)
-    files, unreadable = _attachments(assignment)
+    got = _attachments(assignment)
+    files, sources = got[0], got[1]
+    docs = got[2] if len(got) > 2 else [reader.read_document(f) for f in files]
+    unreadable = [Link(label=f"{s.name} ({s.reason})", url=s.url) for s in sources if not s.read]
+    plan = _reading_plan(docs, text)
     draft = meta_client.generate_structured(
-        _prompt(assignment, courses.get(assignment.course_id, ""), text, links, files, unreadable),
+        _prompt(
+            assignment, courses.get(assignment.course_id, ""), text, links, files, unreadable,
+            notes=notes_medium(conn, assignment.course_id), plan=plan,
+            feedback=_feedback_block(conn, assignment), read_names=[s.name for s in sources if s.read],
+            unit=_unit_outline(conn, assignment),
+        ),
         CardDraft,
         files=files,
         instructions=INSTRUCTIONS,
-        tools=_tools(conn, assignment),
     )
+    kind = decide_kind(assignment, draft.kind)
+    steps, effort = draft.steps[:7], draft.effort
+    if kind == "reading" and plan:
+        notes = [_NOTE_PREFIX.sub("", n) for n in draft.reading_notes]
+        notes = [n[:1].upper() + n[1:] for n in notes] + [""] * len(plan.sittings)
+        extra = [s for s in draft.steps if not _READ_PAGES.match(s)][:3]  # the plan already has these
+        steps = [reading.step(s, n) for s, n in zip(plan.sittings, notes)] + extra
+        effort = _reading_effort(plan)
+    else:
+        plan = None
+    medium = notes_medium(conn, assignment.course_id)
+    says_notes = bool(re.search(r"\bnotes?\b|\bnotebook\b", text, re.I))
+    first_step, *steps = _place_once([draft.first_step, *steps], 1 if medium or says_notes else 0)
+    labels = [l.label for l in links] + [s.name for s in sources]
+    summary, first_step, *steps = _name_keys([draft.summary, first_step, *steps], labels)
+    same = lambda s: " ".join(s.lower().rstrip(". ").split())
+    steps = [s for s in steps if same(s) != same(first_step)] or steps  # the first step is shown above them
     allowed = {l.url for l in links}
     kept = [l for l in draft.links if l.url in allowed]
     return PrepCard(
         assignment_id=assignment.id,
-        kind=assignment.kind if assignment.kind != "other" else draft.kind,
-        summary=draft.summary,
-        first_step=draft.first_step,
-        steps=draft.steps[:7],
+        kind=kind,
+        summary=summary,
+        first_step=first_step,
+        steps=steps,
         links=kept or links,
-        watch_out=draft.watch_out or student_model.watch_out_line(conn, assignment.course_id, assignment.kind),
-        effort=draft.effort,
+        watch_out=_watch_out(conn, assignment, kind, draft.watch_out, text, [d.text for d in docs if d.readable]),
+        effort=effort,
         generated_by="model",
+        sources=sources,
+        instructions_seen=bool(text.strip() or files),
+        reading=plan,
     )
 
 
 def build_prep_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
-    """Generate and store the card for one assignment."""
+    """Generate and store the card for one assignment. If the model call fails, the template card
+    is saved with the reason in `model_error`."""
     card = None
+    error = ""
     if meta_client.configured():
         try:
             card = _model_card(conn, assignment)
         except (MetaError, httpx.HTTPError) as e:
             log.warning("model card for %s failed, using template: %s", assignment.id, e)
+            error = f"{type(e).__name__}: {e}"[:300]
     if card is None:
-        card = fallback_card(conn, assignment)
+        card = fallback_card(conn, assignment).model_copy(update={"model_error": error})
     if card.kind == "test":
         card = practice.add_practice(conn, assignment, card)
     db.save_card(conn, card)
@@ -293,17 +549,47 @@ def upcoming(assignments: list[Assignment], now: datetime, horizon_days: int) ->
 
 
 def build_all_missing(
-    conn: sqlite3.Connection, now: datetime, horizon_days: int | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    now: datetime,
+    horizon_days: int | None = None,
+    limit: int | None = None,
+    progress: Progress | None = None,
 ) -> list[PrepCard]:
-    """Generate cards for upcoming assignments that don't have one yet (soonest due first).
+    """Generate cards for upcoming assignments that don't have one yet, or whose card is stale
+    (a file it couldn't open has been uploaded since), soonest due first.
 
     Model cards cost money, so they're capped per call; template cards are free and uncapped.
+    Model cards are built CARD_WORKERS at a time, each on its own DB connection; a card that
+    fails is reported in `progress` instead of stopping the rest.
     """
-    have = {c.assignment_id for c in db.list_cards(conn)}
+    progress = progress or Progress()
+    have = {c.assignment_id for c in db.list_cards(conn) if not c.stale}
     todo = [
         a for a in upcoming(db.list_assignments(conn), now, horizon_days or settings.card_horizon_days)
         if a.id not in have
     ]
-    if meta_client.configured():
-        todo = todo[: limit or settings.max_cards_per_sync]
-    return [build_prep_card(conn, a) for a in todo]
+    if not meta_client.configured():
+        return [build_prep_card(conn, a) for a in todo]
+    todo = todo[: limit or settings.max_cards_per_sync]
+    progress.phase("cards", total=len(todo))
+
+    def build(a: Assignment) -> PrepCard | None:
+        progress.begin(a.name)
+        own = db.connect()
+        try:
+            card = build_prep_card(own, a)
+            if card.generated_by == "fallback":
+                progress.fail(a.name, card.model_error or "the model call failed, so this is a template card")
+            return card
+        except Exception as e:  # one broken card mustn't stop the others
+            log.exception("card for %s failed", a.id)
+            progress.fail(a.name, f"{type(e).__name__}: {e}")
+            return None
+        finally:
+            own.close()
+            progress.end(a.name)
+
+    if not todo:
+        return []
+    with ThreadPoolExecutor(max_workers=min(CARD_WORKERS, len(todo))) as pool:
+        return [c for c in pool.map(build, todo) if c is not None]

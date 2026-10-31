@@ -105,6 +105,43 @@ input, select {
 .clock-now { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .clock-controls { display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .clock-controls button { padding: 0.25rem 0.6rem; font-size: 0.9rem; }
+.clock-now { flex-wrap: wrap; }
+.clock-time { display: inline-flex; align-items: baseline; gap: 0.4rem; }
+.clock-time strong { font-size: 1.25rem; }
+.clock-part { font-weight: 500; color: var(--muted); }
+.clock-controls { align-items: center; }
+.clock-preview { min-width: 9rem; }
+.clock-msg {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.95rem;
+}
+.clock-msg .close { padding: 0.1rem 0.5rem; }
+.warn-text { color: var(--warn); font-weight: 600; }
+
+/* Sync progress: shown while a sync runs, and after one that had failures. */
+.sync-panel {
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+.sync-panel.has-failures { background: var(--warn-soft); }
+.sync-line { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.sync-line span { overflow-wrap: anywhere; }
+.sync-line button { padding: 0.15rem 0.5rem; }
+.sync-track { height: 4px; margin-top: 0.4rem; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.sync-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s ease; }
+.sync-failures { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--warn); }
+.sync-failures:empty { display: none; }
+.sync-failures li { margin: 0.15rem 0; overflow-wrap: anywhere; }
 .clock-controls input { font-size: 0.9rem; padding: 0.2rem 0.4rem; }
 
 .badge {
@@ -147,8 +184,57 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .checkin.missed { background: var(--warn-soft); border-color: var(--warn); }
 .checkin h2 { margin: 0 0 0.25rem; font-size: 1.1rem; }
 .checkin p { margin: 0.25rem 0 0.75rem; }
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border: 1px dashed var(--warn);
+  border-radius: var(--radius);
+  color: var(--warn);
+  font-weight: 600;
+}
+/* A card whose start was missed, or whose due date passed unsubmitted. */
+.card-alert { border-radius: 8px; padding: 0.65rem 0.85rem; margin: 0 0 0.75rem; border: 1px solid var(--warn); background: var(--warn-soft); }
+.card-alert strong { color: var(--warn); }
+.card-alert p { margin: 0.2rem 0 0.6rem; }
+a.button {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  text-decoration: none;
+  color: inherit;
+}
+a.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
-.pick { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+/* "Pick a time…": a time, one Move button, and what else that shifts. */
+.pick { display: grid; gap: 0.45rem; margin-top: 0.6rem; }
+.pick .effect { margin: 0; }
+/* A missed start covers the page until it's answered. */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.55);
+  overflow-y: auto;
+}
+.modal-box {
+  width: min(560px, 100%);
+  background: var(--surface);
+  border: 2px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 1rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.modal-title { margin: 0 0 0.6rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--warn); }
+.modal-list { display: grid; gap: 0.75rem; }
+body.modal-open { overflow: hidden; }
 .flash { animation: flash 1.6s ease-out; }
 @keyframes flash { from { box-shadow: 0 0 0 4px var(--accent); } to { box-shadow: 0 0 0 0 transparent; } }
 
@@ -176,6 +262,16 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .first-step p { margin: 0.2rem 0 0.6rem; font-weight: 600; }
 .watch { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; }
 .watch strong { font-weight: 700; }
+.reading-length { margin: -0.4rem 0 0.75rem; font-size: 0.85rem; color: var(--ink); font-weight: 600; }
+.card .note { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0 0 0.75rem; font-size: 0.9rem; }
+.sources { color: var(--muted); margin-top: 0.5rem; }
+.sources p { margin: 0.15rem 0; overflow-wrap: anywhere; }
+.sources a { color: inherit; }
+.sources a.open-doc { display: inline-block; margin-left: 0.15rem; padding: 0 0.45rem; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); text-decoration: none; font-weight: 600; white-space: nowrap; }
+.notes-ask { background: var(--surface-2); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0 0; }
+.notes-ask p { margin: 0 0 0.4rem; font-weight: 600; }
+.notes-settings { display: grid; gap: 0.35rem; }
+.notes-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
 .card details { margin: 0.5rem 0; }
 .card summary { cursor: pointer; font-weight: 600; }
 .steps { padding-left: 1.2rem; margin: 0.4rem 0; }
@@ -203,6 +299,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 0.75rem 1rem 3rem; }
 .practice details { margin: 0.2rem 0 0; }
 .practice details summary { font-weight: 500; color: var(--accent); font-size: 0.9rem; }
 .q-meta { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.15rem; }
+.q-source { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
 
 /* ---- week ---- */
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0.5rem; margin-bottom: 0.75rem; }
@@ -267,5 +364,20 @@ td.cell.hot small { color: rgba(255, 255, 255, 0.8); }
   border-radius: 8px;
   max-width: calc(100vw - 2rem);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-  z-index: 10;
+  z-index: 30; /* above the missed-start modal */
 }
+
+/* Graded tests on the dashboard: score as written, sections, and what doesn't add up. */
+.graded-tests { display: grid; gap: 0.6rem; margin: 0.8rem 0; }
+.graded-test { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 0.8rem; background: var(--surface); }
+.graded-test.review { border-color: var(--warn); }
+.graded-head { display: flex; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; align-items: baseline; }
+.graded-score { font-weight: 600; }
+.graded-where { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-top: 0.2rem; }
+.graded-where select { font-size: 0.85rem; }
+.graded-sections { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.15rem; }
+.graded-sections li { display: flex; justify-content: space-between; gap: 0.6rem; font-size: 0.92rem; }
+.graded-sections .lost { color: var(--accent); font-weight: 600; }
+.graded-sections .full { color: var(--ok); font-weight: 600; }
+.graded-review { margin-top: 0.5rem; padding: 0.4rem 0.6rem; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-size: 0.9rem; }
+.graded-review ul { margin: 0.2rem 0 0; padding-left: 1.1rem; }

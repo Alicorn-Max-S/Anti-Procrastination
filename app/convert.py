@@ -7,6 +7,7 @@ missing so prep.py falls back to description text only.
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 OFFICE = {".doc", ".docx", ".odt", ".rtf", ".ppt", ".pptx", ".odp", ".xls", ".xlsx", ".ods"}
@@ -22,6 +23,7 @@ _INSTALL_PATHS = [
 # A profile of our own: with the default one, an open LibreOffice window swallows the
 # conversion and soffice exits without writing the PDF.
 _PROFILE = Path(tempfile.gettempdir()) / "start-helper-lo-profile"
+_LOCK = threading.Lock()  # one soffice per profile: cards are built on several threads at once
 
 
 def find_soffice() -> str | None:
@@ -44,6 +46,13 @@ def to_pdf(path: Path) -> Path | None:
     soffice = find_soffice()
     if not soffice:
         return None
+    with _LOCK:
+        if out.exists():  # another thread converted it while this one waited
+            return out
+        return _convert(soffice, path, out)
+
+
+def _convert(soffice: str, path: Path, out: Path) -> Path | None:
     try:
         subprocess.run(
             [

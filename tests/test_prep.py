@@ -49,21 +49,22 @@ def test_fallback_card_without_a_key(conn):
     assert db.get_card(conn, 1) == card
 
 
-def test_model_card_drops_invented_links_and_offers_tools(conn, model):
+def test_model_card_drops_invented_links_in_one_round(conn, model):
     replies, prompts = model
     replies.append(draft())
     card = prep.build_prep_card(conn, LAB)
     assert card.generated_by == "model" and card.effort == "heavy"
     assert [l.url for l in card.links] == ["https://example.com/handout.pdf"]
-    _, schema, kw = prompts[0]
+    prompt, schema, kw = prompts[0]
     assert schema is prep.CardDraft
-    assert {t.name for t in kw["tools"]} == {"past_feedback", "weak_spots"}
+    assert "tools" not in kw and "Past feedback in this course" in prompt  # sent up front, no tool round
 
 
-def test_model_failure_falls_back(conn, model):
+def test_model_failure_falls_back_with_the_reason(conn, model):
     replies, _ = model
     replies.append(MetaError("boom"))
-    assert prep.build_prep_card(conn, LAB).generated_by == "fallback"
+    card = prep.build_prep_card(conn, LAB)
+    assert card.generated_by == "fallback" and "boom" in card.model_error
 
 
 def test_build_all_missing_only_upcoming_and_capped(conn, model):
@@ -103,7 +104,7 @@ def test_test_card_gets_practice_aimed_at_weak_spots(conn, model):
     replies.append(practice.Solved(answers=["era", "era", "era"]))
     card = prep.build_prep_card(conn, quiz)
     assert len(card.practice) == 3 and all(p.verified for p in card.practice)
-    assert card.first_step.startswith("Answer practice question 1")
+    assert card.first_step.startswith("Read practice question 1")
     assert "pret_imp / fill_in_blank" in prompts[1][0]
 
 

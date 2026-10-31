@@ -43,15 +43,17 @@ def test_watch_out_prefers_rubric_losses_of_the_same_kind(conn):
         Assignment(id=2, course_id=1, name="Essay 1", kind="essay",
                    comments=[SubmissionComment(id=1, assignment_id=2, author="Ms. R", text="Cite more")]),
     )
-    line = student_model.watch_out_line(conn, 1, "lab")
+    line = student_model.watch_out_line(conn, Assignment(id=3, course_id=1, name="Lab 4"), "lab")
     assert "Lab 3" in line and "3/5" in line and "Observations" in line and "More detail" in line
-    assert "Ms. R" in student_model.watch_out_line(conn, 1, "essay")
+    assert "Ms. R" in student_model.watch_out_line(conn, Assignment(id=4, course_id=1, name="Essay 2"), "essay")
 
 
 def test_watch_out_falls_back_to_tests_then_empty(conn):
-    assert student_model.watch_out_line(conn, 1, "lab") == ""
+    quiz = Assignment(id=5, course_id=1, name="Quiz 4", kind="test")
+    assert student_model.watch_out_line(conn, quiz) == ""
     db.save_test_rows(conn, rows())
-    assert "pret_imp" in student_model.watch_out_line(conn, 1, "test")
+    assert "habitual past" in student_model.watch_out_line(conn, quiz)
+    assert student_model.watch_out_line(conn, Assignment(id=6, course_id=1, name="Lab 4", kind="lab")) == ""
 
 
 def test_pointer_comments_are_not_evidence(conn):
@@ -88,17 +90,18 @@ def test_rubric_losses_are_rounded(conn):
         Assignment(
             id=4, course_id=1, name="Quick write #1", kind="essay",
             rubric=[
-                RubricScore(assignment_id=4, criterion="Assertion", points=2.85, points_possible=3),
-                RubricScore(assignment_id=4, criterion="Connections", points=3.75, points_possible=4),
+                RubricScore(assignment_id=4, criterion="Assertion", points=2.35, points_possible=3),
+                RubricScore(assignment_id=4, criterion="Connections", points=2.9, points_possible=4),
                 RubricScore(assignment_id=4, criterion="Clarity", points=0.3 + 0.6, points_possible=0.9),  # no real loss
             ],
         ),
     )
     items = {i["criterion"]: i for i in student_model.feedback_evidence(conn, 1)}
-    assert items["Assertion"]["points_lost"] == 0.15
-    assert items["Connections"]["points_lost"] == 0.25
+    assert items["Assertion"]["points_lost"] == 0.65  # 3 - 2.35 is 0.6499999999999999 in floats
+    assert items["Connections"]["points_lost"] == 1.1
     assert "Clarity" not in items
-    assert "lost 0.25/4" in student_model.watch_out_line(conn, 1, "essay")  # worst share of marks first
+    essay = Assignment(id=5, course_id=1, name="Quick write #2", kind="essay")
+    assert "lost 1.1/4" in student_model.watch_out_line(conn, essay, "essay")  # worst share of marks first
 
 
 def test_evidence_is_per_course(conn):

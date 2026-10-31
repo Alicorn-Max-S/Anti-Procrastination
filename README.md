@@ -23,12 +23,14 @@ python -m app.demo            # four fake courses, graded history, cards, graded
 python -m app.demo --clear    # remove it again
 ```
 
+Assignments linking Google files shared only inside your school? The server can't open those without your sign-in, so a small Chrome extension fetches them in your signed-in Chrome. Setup steps are in `extension/README.md`.
+
 ## How it works
 
 1. **Sync** (`sync.py`, `canvas.py`): courses, assignments, rubric criteria, and, for graded work, teacher comments and rubric scores.
 2. **Prep cards** (`prep.py`): for each assignment due in the next `CARD_HORIZON_DAYS`, Muse Spark gets the description, rubric, links and attachments (DOCX/PPTX converted to PDF if LibreOffice is installed) and returns a card through **structured output**. It can call two **tools**, `past_feedback` and `weak_spots`, to ground the "watch out" line in what your teachers actually said. Links it returns are kept only if they really came from Canvas.
 3. **Test cards** (`practice.py`): practice questions aimed at your weakest topic x question-type cells, each answer checked by an independent second solve.
-4. **Graded tests** (`grader.py`): a photo of a marked test goes to the model with **vision** and comes back as one row per question (answer, marks, teacher note, topic, type). The Dashboard shows the resulting grid (`student_model.py`).
+4. **Graded tests** (`grader.py`): a photo or scan of a marked test goes to the model with **vision**, one call per page, and comes back as sections (subtotals, bonus) and one row per question (answer, marks, X or check, teacher note, topic, type). Code checks the teacher's arithmetic (questions to section subtotals, sections to page totals and the written score) and flags the test for review when it doesn't add up. The course is detected from the test, and question types come from a list kept per course. The Dashboard shows each test's score and sections and the resulting grid (`student_model.py`). `python -m app.grader FILE` reads a file from the command line.
 5. **The start loop** (`scheduler.py`, `loop.py`, `checkin.py`): each card gets a block inside your daily window, worked back from the due date. At the block's start you get a ping; 15 minutes without starting marks it missed and asks when you'll start. Picking a time moves that block and shifts only the blocks in its way. Every ping, answer and start is saved in `pings` (the Dashboard's starting stats).
 
 ## Demo controls
@@ -59,6 +61,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/db.py`, `app/models.py`, `app/config.py` | SQLite layer, shared types, settings |
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
 | `static/` | The single web page, PWA manifest, service worker, icons |
+| `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
 | `tests/` | Tests, run with `pytest`; they never touch Canvas, the model or push |
 
 Real school data (the DB, attachments, test photos) lives under `data/`, which is gitignored. This repo is public.
