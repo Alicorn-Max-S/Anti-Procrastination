@@ -28,21 +28,32 @@ MAX_TOPICS = len(LETTERS) - 1  # 25 topics plus "None of these fit", one letter 
 DESCRIPTION_CHARS = 1200
 
 # The template hint: the prep doc each assignment type usually gets, one line per type in the words
-# of Max's Nov 1 rules (spec, Status section). Something else has no line: its templates split.
+# of Max's Nov 1 rules (spec, Status section).
 TEMPLATE_DEFAULTS = {
     "test_or_quiz": "Dashboard",
     "essay_or_written_response": "Dashboard, including timed in-class writing like quick writes; "
                                  "Checklist for journals or responses written on the spot, and "
                                  "shorter writing with a clear list of requirements",
-    "reading": "Document if it's in a humanities class (English or history) and about the class's "
-               "subject; otherwise Cornell (a science or other reading, a syllabus, assignment "
-               "instructions)",
+    "reading": "Document if it's in a humanities class (English or history), about the class's "
+               "subject and read outside class; otherwise Cornell (a reading done in class, a science "
+               "or other reading, a syllabus, assignment instructions)",
     "problem_set_or_worksheet": "Checklist",
     "lab_report": "Dashboard",
-    "project_or_presentation": "Checklist, or Dashboard if done mainly in class; a piece that's mostly "
-                               "reading follows the reading rule (Document if it's in a humanities "
-                               "class and about the class's subject, otherwise Cornell)",
+    "project_or_presentation": "a piece that's mostly reading follows the reading rule (Document if "
+                               "it's in a humanities class, about the class's subject and read outside "
+                               "class, otherwise Cornell); otherwise Checklist, or Dashboard if done "
+                               "mainly in class",
     "video_or_audio": "Cornell for a video, Document for a podcast or other audio",
+    "something_else": "Quick task if it's one small action with nothing to prep, Dashboard for a "
+                      "participation grade, otherwise Checklist",
+}
+
+# Types whose template is never in doubt: with TEMPLATE_FROM_TYPE on, the decider skips the template
+# question for them and takes this (tier "default"). Same picks as their lines above.
+TEMPLATE_FROM_TYPE = {
+    "test_or_quiz": "dashboard",
+    "problem_set_or_worksheet": "checklist",
+    "lab_report": "dashboard",
 }
 
 # Asked after type, with System One's own type answer in the prompt: base Glimmer and Spark answer

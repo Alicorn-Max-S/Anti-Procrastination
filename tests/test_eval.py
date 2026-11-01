@@ -57,6 +57,16 @@ def test_decide_skips_thinking_for_skip_fields():
     assert cal.decide(r, 0.5, 0.9, True, 0.5).tier == "instant"
 
 
+def test_a_loop_that_closes_on_the_fast_answer_is_thought():
+    agrees = rec(0, probe(0.6, 0), trace=[(80, probe(0.7, 0))])
+    assert cal.decide(agrees, 0.9, 0.95, False, 0.5) == cal.Outcome("thought", 0, True, False, 80)
+    assert cal.loop_end(agrees, 0.95, 0.5).tier == "guessed"  # the think line is still set on clearing
+    off = rec(1, probe(0.6, 0), trace=[(80, probe(0.7, 1))])
+    assert cal.decide(off, 0.9, 0.95, False, 0.5).tier == "guessed"
+    capped = rec(0, probe(0.6, 0), trace=[(530, probe(0.7, 0))], finished=False)
+    assert cal.decide(capped, 0.9, 0.95, False, 0.5) == cal.Outcome("guessed", 0, True, True, 530)
+
+
 # ---- the proposal rules ---------------------------------------------------------------------
 
 
@@ -80,11 +90,12 @@ def test_the_reversed_check_can_lower_the_line():
 
 def test_cheap_line_allows_ten_percent_and_skip_needs_ten_percent_fast_error():
     recs = [rec(0, probe(0.6 + i / 100)) for i in range(18)] + [rec(1, probe(0.65, 0)), rec(1, probe(0.62, 0))]
-    p = cal.plan_field("effort", recs, 0.5)
+    p = cal.plan_field("format", recs, 0.5)
     assert p.fast == 0.6  # 2 wrong of 20 accepted is 10%
     assert p.skip and p.fast_error == pytest.approx(0.1)
     worse = recs + [rec(2, probe(0.61, 0))]
-    assert not cal.plan_field("effort", worse, 0.5).skip
+    assert not cal.plan_field("format", worse, 0.5).skip
+    assert cal.plan_field("effort", worse, 0.5).skip  # SKIP_THINKING, set by hand
 
 
 def test_no_zero_error_line_means_never():
@@ -103,6 +114,39 @@ def test_think_line_is_replayed_on_the_fields_left_unsure():
     assert 0.9 < p.think <= 0.97
     outs = [cal.decide(r, p.fast, p.think, False, 0.5) for r in recs]
     assert all(o.top == cal.right(r) for o, r in zip(outs, recs))
+
+
+def test_credit_think_line_is_set_by_hand():
+    recs = [rec(0, probe(0.5), trace=[(40, probe(0.8, 0)), (90, probe(0.97, 0))]),
+            rec(1, probe(0.5, 0), trace=[(40, probe(0.9, 0)), (90, probe(0.98, 1))])]
+    p = cal.plan_field("credit", recs, 0.5)
+    assert p.think == cal.THINK_STOPS["credit"] == 0.999 and p.think_fixed
+    assert 0.9 < p.think_rule <= 0.97  # what the zero-error rule would give, for the report
+    t = cal.plan_field("type", recs, 0.5)
+    assert t.think == t.think_rule and not t.think_fixed
+
+
+def assignment_rec(key: str, field, top: str, conf: float = 0.99) -> dict:
+    options = [o.value for o in field.options]
+    fwd = probe(conf, options.index(top))
+    return {"key": key, "field": field.key, "options": options, "forward": fwd, "reversed": fwd,
+            "trace": [{"think_tokens": 40, **fwd}], "finished": True, "think_tokens": 40, "run": {}}
+
+
+def test_report_scores_a_template_the_type_settles_as_its_default(monkeypatch):
+    from eval.items import Item
+    labels = {"1": ("lab_report", "dashboard"), "2": ("test_or_quiz", "checklist"), "3": ("reading", "document")}
+    items = [Item("assignment", f"assignment:{k}", "Chem", {}, {"type": t, "template": m}) for k, (t, m) in labels.items()]
+    recs = {(i.key, "type"): assignment_rec(i.key, TYPE, i.labels["type"]) for i in items}
+    recs[("assignment:3", "template")] = assignment_rec("assignment:3", TEMPLATE, "document")
+    monkeypatch.setattr(cal, "load_records", lambda: recs)
+    text, _, plans = cal.report(items, [], 0.5)
+    assert "From the type (test, problem set or lab, so no template question): 2, 1 right (50%)" in text
+    assert "template accuracy is 67% of 3" in text and "assignment:2: dashboard, labeled checklist" in text
+    assert next(p for p in plans if p.field == "template").n == 1
+    assert "To clarify (thinking ended off the fast pass's answer, or at the cap): 0 of 3" in text
+    text, _, _ = cal.report(items, [], 0.5, template_from_type=False)
+    assert "Not recorded yet: 2 labeled fields" in text and "From the type" not in text
 
 
 def test_tidy_keeps_outcomes():

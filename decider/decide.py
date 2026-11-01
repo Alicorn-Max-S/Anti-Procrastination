@@ -3,8 +3,13 @@ that came out unsure. Loops run in parallel, one llama-server slot each, only wh
 An assignment goes in two stages: type, then template and effort with the type answer in the prompt.
 
 The tiers: `instant` when the forward and reversed fast-pass probes agree and clear the fast line;
-`thought` when a thinking probe clears the think line; `guessed` for the top option otherwise (a
-cheap field in skip_thinking, Glimmer ending its thinking below the line, or the cap).
+`thought` when a thinking probe clears the think line, or Glimmer closes its thinking on the fast
+pass's own answer; `guessed` when thinking ends on another answer or runs to the cap, and for a cheap
+field in skip_thinking; `default` for a template the type settles (prompts.TEMPLATE_FROM_TYPE).
+
+`clarify` marks what goes on the student's clarify list: a guessed type or template. A guessed
+effort only gets the badge, and topic and credit keep thinking's answer (when it disagrees with the
+fast pass on credit, thinking is right 7 times in 9).
 """
 
 import threading
@@ -15,7 +20,7 @@ from dataclasses import dataclass
 from queue import Queue
 from typing import Callable
 
-from decisions.fields import ASSIGNMENT_FIELDS, QUESTION_FIELDS, Field
+from decisions.fields import ASSIGNMENT_FIELDS, QUESTION_FIELDS, Field, field_values
 
 from .config import Lines, Settings, load_lines
 from .gate import FastPass, fast_pass
@@ -23,6 +28,7 @@ from .llama import Llama
 from .probe import Probe
 from .prompts import (
     MAX_TOPICS,
+    TEMPLATE_FROM_TYPE,
     USES_TYPE,
     Choice,
     Prompt,
@@ -35,6 +41,10 @@ from .prompts import (
 )
 from .think import Thought, think
 from .topics import name_topic, resolve
+
+
+CLARIFY_FIELDS = ("type", "template")  # a guessed answer here goes on the clarify list
+FIELD_BY_KEY = {f.key: f for f in ASSIGNMENT_FIELDS}
 
 
 class UnknownField(ValueError):
@@ -101,6 +111,16 @@ class Decider:
             "trace": [_entry(n, p, c) for n, p, c in entries],
             "prompt_version": self.s.prompt_version,
             "model": self.llama.model(),
+            "clarify": tier == "guessed" and job.field.key in CLARIFY_FIELDS,
+        }
+
+    def _from_type(self, f: Field, value: str) -> dict:
+        """A template the type settles: no question asked, so no probes and no trace."""
+        return {
+            "value": value, "option_index": field_values(f).index(value), "confidence": 1.0,
+            "letter_share": 1.0, "flipped": None, "tier": "default", "think_tokens": 0,
+            "probe_tokens": 0, "trace": [], "prompt_version": self.s.prompt_version,
+            "model": self.llama.model(), "clarify": False,
         }
 
     def _settle(self, job: Job, lines: Lines, slot: int = 0) -> dict | None:
@@ -118,7 +138,10 @@ class Decider:
     def _think(self, job: Job, lines: Lines, slot: int, seed: int | None) -> dict:
         job.thought = think(self.llama, job.prompt, job.choice, lines.think(job.field.key), self.s,
                             slot, seed)
-        return self._decision(job, "thought" if job.thought.clear else "guessed")
+        t = job.thought
+        fast = job.fast_choice.options[job.fast.forward.top].value
+        agrees = t.finished and job.choice.options[t.last.top].value == fast
+        return self._decision(job, "thought" if t.clear or agrees else "guessed")
 
     def _loops(self, jobs: list[Job], run: Callable[[Job, int], None]) -> None:
         if self.s.parallel_slots <= 1 or len(jobs) <= 1:
@@ -154,13 +177,16 @@ class Decider:
     # ---- items --------------------------------------------------------------------------------
 
     def decide_assignment(self, assignment: dict, fields: list[str] | None = None,
-                          seed: int | None = None) -> dict:
+                          seed: int | None = None, type_value: str | None = None) -> dict:
         """Type first, then template and effort with the type answer in their prompt (USES_TYPE).
-        Type is decided even when only a later field is asked for."""
+        Type is decided even when only a later field is asked for. `type_value` is a type the
+        student confirmed: it isn't decided again (nor returned), and the later fields use it."""
         wanted = pick_fields(ASSIGNMENT_FIELDS, fields)
+        if type_value is not None and type_value not in field_values(FIELD_BY_KEY["type"]):
+            raise UnknownField(f"unknown type {type_value!r}; choose from {field_values(FIELD_BY_KEY['type'])}")
         later = [f for f in wanted if f.key in USES_TYPE]
-        first = [f for f in ASSIGNMENT_FIELDS
-                 if f.key not in USES_TYPE and (f in wanted or (bool(later) and f.key == "type"))]
+        need_type = type_value is None and (FIELD_BY_KEY["type"] in wanted or bool(later))
+        first = [FIELD_BY_KEY["type"]] if need_type else []
         with self._lock:
             start, before = time.perf_counter(), Counter(self.llama.counts)
             lines = load_lines(self.s.lines_file)
@@ -183,9 +209,13 @@ class Decider:
 
             stage(first, context)
             if later:
-                stage(later, with_type(context, decisions["type"]["value"]))
+                t = type_value or decisions["type"]["value"]
+                if self.s.template_from_type and t in TEMPLATE_FROM_TYPE and FIELD_BY_KEY["template"] in later:
+                    decisions["template"] = self._from_type(FIELD_BY_KEY["template"], TEMPLATE_FROM_TYPE[t])
+                    later = [f for f in later if f.key != "template"]
+                stage(later, with_type(context, t))
             return {
-                "decisions": {f.key: decisions[f.key] for f in wanted},
+                "decisions": {f.key: decisions[f.key] for f in wanted if f.key in decisions},
                 "timings": self._timings(start, before),
             }
 
@@ -209,9 +239,11 @@ class Decider:
                 return Job(qid, f, test_context(q, topics, course), choice_for(f, topics))
 
             def settle_topic(job: Job, d: dict, slot: int) -> dict:
-                """Name the topic when "None of these fit" was decided confidently."""
+                """Name the topic when "None of these fit" was decided confidently: instantly, or by
+                a thinking probe that cleared the line (agreeing with the fast pass isn't enough)."""
                 none = none_fit_index(job.choice)
-                if none is None or d["option_index"] != none or d["tier"] == "guessed":
+                sure = d["tier"] == "instant" or (job.thought is not None and job.thought.clear)
+                if none is None or d["option_index"] != none or not sure:
                     return d
                 name = name_topic(self.llama, job.context, self.s.fast_pass_format, slot)
                 if not name:

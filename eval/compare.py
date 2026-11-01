@@ -6,7 +6,7 @@
    its fields, with the answers parsed from the text.
 3. System One, fast pass only: the forward fast-pass probe's answer for every field, timed by the
    fast pass alone. Taken from setup 4's records.
-4. System One, full: the decider with decisions/lines.json.
+4. System One, full: the decider with the lines file (decisions/lines.json unless LINES_FILE says otherwise).
 
 Every setup sees the same item text (Item.context) and the same questions, options and letters
 (decider.prompts.choice_for, built from decisions/fields.py). Setups 1 and 2 get all of an item's
@@ -41,6 +41,7 @@ from .items import EVAL_DATA, ROOT, Item, Skipped
 OUT = ROOT / "eval"
 RECORDS = EVAL_DATA / "compare"
 RUNNABLE = ("spark", "glimmer", "system_one")
+TIERS = ("instant", "thought", "guessed", "default")  # decider/decide.py
 SETUPS = {  # in chart and table order
     "spark": "All Spark",
     "glimmer": "Base Glimmer",
@@ -191,6 +192,8 @@ class TimedDecider(Decider):
 
 
 def _fast_value(d: dict) -> str:
+    if not d["trace"]:  # a template the type settled: the fast pass takes the same shortcut
+        return d["value"]
     probs = d["trace"][0]["probs"]  # the forward fast-pass probe
     return max(probs, key=probs.get)
 
@@ -203,6 +206,7 @@ def _system_one_record(ds: dict, seconds: float, fast_seconds: float, s: Setting
         "think_tokens": {f: d["think_tokens"] for f, d in ds.items()},
         "looped": {f: len(d["trace"]) > 1 for f, d in ds.items()},
         "cap_hits": {f: d["tier"] == "guessed" and d["think_tokens"] >= s.cap_tokens for f, d in ds.items()},
+        "clarify": {f: d.get("clarify", False) for f, d in ds.items()},
         "seconds": round(seconds, 3),
         "fast_seconds": round(fast_seconds, 3),
     }
@@ -329,6 +333,7 @@ class Score:
     tiers: dict[str, dict[str, int]] = field(default_factory=dict)
     loops: dict[str, int] = field(default_factory=dict)
     cap_hits: dict[str, int] = field(default_factory=dict)
+    clarify: dict[str, list[bool]] = field(default_factory=dict)  # field -> right, per field sent to clarify
     unparsed: int = 0
     truncated: int = 0
 
@@ -361,8 +366,10 @@ def score(setup: str, items: list[Item], recs: dict[str, dict]) -> Score:
         for f, label in item.labels.items():
             sc.fields.setdefault(f, []).append(answers.get(f) == label)
             if setup == "system_one":
-                tiers = sc.tiers.setdefault(f, {"instant": 0, "thought": 0, "guessed": 0})
+                tiers = sc.tiers.setdefault(f, dict.fromkeys(TIERS, 0))
                 tiers[r["tiers"][f]] += 1
+                if r.get("clarify", {}).get(f):
+                    sc.clarify.setdefault(f, []).append(answers.get(f) == label)
                 sc.loops[f] = sc.loops.get(f, 0) + r["looped"][f]
                 sc.cap_hits[f] = sc.cap_hits.get(f, 0) + r["cap_hits"][f]
         if setup == "spark":
@@ -395,7 +402,7 @@ def _money(x: float) -> str:
 
 def write_csv(scores: list[Score]) -> None:
     cols = ["setup", "scope", "items", "fields", "correct", "accuracy", "seconds_per_item",
-            "cost_per_1000_items", "instant", "thought", "guessed", "loops", "cap_hits"]
+            "cost_per_1000_items", *TIERS, "loops", "cap_hits", "clarify", "clarify_wrong"]
     with (OUT / "results.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(cols)
@@ -411,9 +418,11 @@ def write_csv(scores: list[Score]) -> None:
                     row |= {"items": sc.items, "seconds_per_item": round(sc.sec_per_item, 3),
                             "cost_per_1000_items": round(sc.cost_per_1000, 4)}
                 if sc.setup == "system_one":
-                    t = {k: sum(sc.tiers.get(f, {}).get(k, 0) for f in names) for k in ("instant", "thought", "guessed")}
+                    t = {k: sum(sc.tiers.get(f, {}).get(k, 0) for f in names) for k in TIERS}
+                    asked = [ok for f in names for ok in sc.clarify.get(f, [])]
                     row |= t | {"loops": sum(sc.loops.get(f, 0) for f in names),
-                                "cap_hits": sum(sc.cap_hits.get(f, 0) for f in names)}
+                                "cap_hits": sum(sc.cap_hits.get(f, 0) for f in names),
+                                "clarify": len(asked), "clarify_wrong": len(asked) - sum(asked)}
                 w.writerow([row.get(c, "") for c in cols])
             for kind, secs in sc.seconds_by_kind.items():
                 w.writerow([name, f"{kind} items", len(secs), "", "", "", round(mean(secs), 3)]
@@ -490,21 +499,22 @@ def write_summary(items: list[Item], skipped: list[Skipped], scores: list[Score]
     one = by.get("system_one")
     if one:
         lines += ["", "## System One tiers", "",
-                  "| Field | Instant | Thought | Guessed | Thinking loops | Hit the cap |", "|---|---|---|---|---|---|"]
-        for f in FIELD_ORDER:
-            t = one.tiers.get(f)
-            if not t:
-                continue
+                  "| Field | Instant | Thought | Guessed | From the type | Thinking loops | Hit the cap | To clarify (wrong) |",
+                  "|---|---|---|---|---|---|---|---|"]
+
+        def row(name: str, t: dict, loops: int, caps: int, asked: list[bool]) -> str:
             n = sum(t.values())
-            loops, caps = one.loops.get(f, 0), one.cap_hits.get(f, 0)
-            lines.append(f"| {f} | {_pct(t['instant'], n)} | {_pct(t['thought'], n)} | {_pct(t['guessed'], n)} | "
-                         f"{loops} | {caps} ({_pct(caps, loops)}) |")
-        tot = {k: sum(t[k] for t in one.tiers.values()) for k in ("instant", "thought", "guessed")}
-        n = sum(tot.values())
-        loops, caps = sum(one.loops.values()), sum(one.cap_hits.values())
-        lines.append(f"| all | {_pct(tot['instant'], n)} | {_pct(tot['thought'], n)} | {_pct(tot['guessed'], n)} | "
-                     f"{loops} | {caps} ({_pct(caps, loops)}) |")
-        lines += ["", f"Lines: `decisions/lines.json` = `{lines_json()}`."]
+            return (f"| {name} | {_pct(t['instant'], n)} | {_pct(t['thought'], n)} | {_pct(t['guessed'], n)} | "
+                    f"{_pct(t['default'], n)} | {loops} | {caps} ({_pct(caps, loops)}) | "
+                    f"{len(asked)} ({len(asked) - sum(asked)}) |")
+
+        for f in FIELD_ORDER:
+            if one.tiers.get(f):
+                lines.append(row(f, one.tiers[f], one.loops.get(f, 0), one.cap_hits.get(f, 0), one.clarify.get(f, [])))
+        tot = {k: sum(t[k] for t in one.tiers.values()) for k in TIERS}
+        lines.append(row("all", tot, sum(one.loops.values()), sum(one.cap_hits.values()),
+                         [ok for v in one.clarify.values() for ok in v]))
+        lines += ["", f"Lines: `{lines_name()}` = `{lines_json()}`."]
     lines += ["", "## How the numbers are made", ""]
     lines.append("- Seconds per item is wall clock per call. The decider gets a graded test's questions in "
                  "one call, as Part B will, so each question counts that call's time divided by its questions. "
@@ -532,6 +542,13 @@ def write_summary(items: list[Item], skipped: list[Skipped], scores: list[Score]
     text = "\n".join(lines) + "\n"
     (OUT / "summary.md").write_text(text, encoding="utf-8")
     return text
+
+
+def lines_name() -> str:
+    from eval.run import lines_path
+
+    p = lines_path()
+    return p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else str(p)
 
 
 def lines_json() -> str:

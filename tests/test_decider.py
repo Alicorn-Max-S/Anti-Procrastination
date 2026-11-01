@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from decider import main
 from decider.config import Settings
-from decider.decide import Decider
+from decider.decide import Decider, UnknownField
 from decider.gate import fast_pass
 from decider.llama import Llama
 from decider.probe import letter_probs, read_probe
@@ -346,9 +346,10 @@ def decider(fake: FakeLlama, s: Settings) -> Decider:
 
 
 def by_question(table: dict) -> callable:
-    """A probe script keyed by the question text's first words."""
+    """A probe script keyed by the question text's first words (a value can be a probe script too)."""
     def probe(r: Req) -> dict:
-        return next(v for k, v in table.items() if r.question.startswith(k))
+        v = next(v for k, v in table.items() if r.question.startswith(k))
+        return v(r) if callable(v) else v
     return probe
 
 
@@ -367,7 +368,9 @@ def test_assignment_tiers(s):
     assert d["type"]["value"] == "reading" and d["type"]["tier"] == "instant"
     assert d["type"]["option_index"] == 2 and d["type"]["flipped"] is False
     assert d["template"]["tier"] == "instant" and d["template"]["value"] == "document"
-    assert d["effort"]["tier"] == "guessed" and d["effort"]["flipped"] is None
+    # thinking closed on the fast pass's own answer, below the line: still thought
+    assert d["effort"]["tier"] == "thought" and d["effort"]["flipped"] is None
+    assert not any(x["clarify"] for x in d.values())
     assert d["effort"]["think_tokens"] == 30
     assert [e["think_tokens"] for e in d["effort"]["trace"]] == [0, 30]
     assert d["type"]["model"] == "Muse-Glimmer-fake" and d["type"]["prompt_version"] == "t1"
@@ -377,7 +380,8 @@ def test_assignment_tiers(s):
 def test_probe_tokens_after_first_are_only_the_tail(s):
     fake = FakeLlama(probe=lambda r: sure(r.options["A"]))  # flips, so every field thinks
     fake.think_fn = lambda r: (words(30, "\n\n") + [EOM], "eos")
-    out = decider(fake, s).decide_assignment(ASSIGNMENT)
+    # type ends on Test or quiz (option A), which settles the template: ask it anyway here
+    out = decider(fake, replace(s, template_from_type=False)).decide_assignment(ASSIGNMENT)
     probes = [(r, t) for k, r, t in fake.requests if k == "probe"]
     assert len(probes) == 9 and probes[0][1]["prompt_n"] == len(probes[0][0].ids)
     for r, t in probes[1:]:  # never the system turn or the assignment again
@@ -406,17 +410,70 @@ def test_lines_file_and_skip_thinking(s, tmp_path):
                                         "How much effort": {"Multi-day": 0.6, "One short sitting": 0.35}}),
                      think=lambda r: ([], "eos"))
     out = decider(fake, s).decide_assignment(ASSIGNMENT, ["type", "effort"])
-    assert out["decisions"]["type"]["tier"] == "guessed"  # 0.91 < 0.99: unsure, thought, fell short
+    assert out["decisions"]["type"]["tier"] == "thought"  # 0.91 < 0.99, but it closed on Reading again
     assert out["decisions"]["effort"]["tier"] == "guessed"  # unsure and cheap: no thinking
     assert out["decisions"]["effort"]["value"] == "multi_day"
     assert out["decisions"]["effort"]["think_tokens"] == 0
     assert len(fake.kinds("think")) == 1  # only type thought
 
 
+def off_the_fast_answer(fast: dict, after: dict) -> callable:
+    """Probes that say `fast` on the fast pass and `after` once thinking has started."""
+    return lambda r: after if r.think_n else fast
+
+
+def test_thinking_off_the_fast_answer_is_guessed_and_only_type_and_template_clarify(s):
+    fake = FakeLlama(probe=by_question({
+        "What type": off_the_fast_answer({"Reading": 0.5, "Essay or written response": 0.45},
+                                         {"Essay or written response": 0.6, "Reading": 0.35}),
+        "Which prep": off_the_fast_answer({"Document": 0.5, "Dashboard": 0.45},
+                                          {"Dashboard": 0.6, "Document": 0.35}),
+        "How much effort": off_the_fast_answer({"One solid session": 0.5, "Multi-day": 0.45},
+                                               {"Multi-day": 0.6, "One solid session": 0.35}),
+    }), think=lambda r: (words(30) + [EOM], "eos"))
+    d = decider(fake, s).decide_assignment(ASSIGNMENT)["decisions"]
+    assert {k: (v["value"], v["tier"], v["clarify"]) for k, v in d.items()} == {
+        "type": ("essay_or_written_response", "guessed", True),
+        "template": ("dashboard", "guessed", True),
+        "effort": ("multi_day", "guessed", False),  # the badge, but no question
+    }
+
+
+def test_the_cap_is_guessed_even_on_the_fast_answer(s):
+    fake = FakeLlama(probe=by_question({"What type": UNSURE}), think=lambda r: (words(90), "limit"))
+    d = decider(fake, s).decide_assignment(ASSIGNMENT, ["type"])["decisions"]["type"]
+    assert d["value"] == "reading" and d["tier"] == "guessed" and d["clarify"]
+
+
+def test_a_type_the_student_fixed_is_not_decided_again(s):
+    fake = FakeLlama(probe=by_question({"Which prep": sure("Document"), "How much effort": sure("One solid session")}))
+    out = decider(fake, s).decide_assignment(ASSIGNMENT, ["template", "effort"], type_value="reading")
+    probes = fake.kinds("probe")
+    assert not [r for r in probes if r.question.startswith("What type")]
+    assert all("Assignment type: Reading" in r.text for r in probes)
+    assert list(out["decisions"]) == ["template", "effort"]
+    with pytest.raises(UnknownField):
+        decider(fake, s).decide_assignment(ASSIGNMENT, ["template"], type_value="poem")
+
+
+def test_the_type_settles_the_template_for_tests_problem_sets_and_labs(s):
+    fake = FakeLlama(probe=by_question({"What type": sure("Lab report"), "How much effort": sure("One solid session")}))
+    d = decider(fake, s).decide_assignment(ASSIGNMENT)["decisions"]
+    assert {k: v for k, v in d["template"].items() if k not in ("prompt_version", "model")} == {
+        "value": "dashboard", "option_index": 2, "confidence": 1.0, "letter_share": 1.0, "flipped": None,
+        "tier": "default", "think_tokens": 0, "probe_tokens": 0, "trace": [], "clarify": False}
+    assert not [r for r in fake.kinds("probe") if r.question.startswith("Which prep")]
+    fake = FakeLlama(probe=by_question({"What type": sure("Lab report"), "Which prep": sure("Checklist"),
+                                        "How much effort": sure("One solid session")}))
+    d = decider(fake, replace(s, template_from_type=False)).decide_assignment(ASSIGNMENT)["decisions"]
+    assert d["template"]["value"] == "checklist" and d["template"]["tier"] == "instant"
+
+
 def test_template_question_has_hint_and_reply_line():
     block = choice_for(TEMPLATE).block()
     assert "Usual template by assignment type:\n- Test or quiz: Dashboard\n" in block
-    assert "- Something else:" not in block  # its templates split, so it gets no line
+    assert ("- Something else: Quick task if it's one small action with nothing to prep, Dashboard for a "
+            "participation grade, otherwise Checklist") in block
     assert block.splitlines()[-1] == "Reply with just the letter."
     assert "A) Document" in block and "E) Quick task" in block
 
@@ -492,7 +549,8 @@ def test_no_naming_when_none_fit_is_only_a_guess(s):
     )
     out = decider(fake, s).decide_test(TOPICS, QUESTIONS[:1])
     d = out["decisions"]["1"]["topic"]
-    assert d["value"] == "none_fit" and d["tier"] == "guessed"
+    # thinking closed on the fast pass's answer, so it's thought, but no probe cleared the line
+    assert d["value"] == "none_fit" and d["tier"] == "thought"
     assert fake.kinds("name") == [] and out["new_topics"] == []
 
 
@@ -507,7 +565,7 @@ def test_test_runs_fast_passes_first_then_loops(s):
     thinks = [i for i, (k, _, _) in enumerate(fake.requests) if k == "think"]
     assert len(fast) == 2 * 5 and len(thinks) == 2  # format and credit twice each, topic once
     assert max(fast) < min(thinks)
-    assert [d["topic"]["tier"] for d in out["decisions"].values()] == ["guessed", "guessed"]
+    assert [d["topic"]["tier"] for d in out["decisions"].values()] == ["thought", "thought"]
 
 
 def test_parallel_loops_each_get_their_own_slot(s):
@@ -523,7 +581,7 @@ def test_parallel_loops_each_get_their_own_slot(s):
         return words(30) + [EOM], "eos"
 
     fake = FakeLlama(probe=lambda r: sure(r.options["A"]), think=slow_think)  # flips: all think
-    out = decider(fake, replace(s, parallel_slots=3)).decide_assignment(ASSIGNMENT)
+    out = decider(fake, replace(s, parallel_slots=3, template_from_type=False)).decide_assignment(ASSIGNMENT)
     first_chunks = [r for r in fake.kinds("think") if r.think_n == 0]
     assert sorted(r.body["id_slot"] for r in first_chunks[1:]) == [0, 1]
     assert all(d["tier"] == "thought" for d in out["decisions"].values())
@@ -557,8 +615,20 @@ def test_api_decide_assignment(api):
     assert {k: v["value"] for k, v in d.items()} == {
         "type": "reading", "template": "document", "effort": "one_solid_session"}
     assert set(d["type"]) == {"value", "option_index", "confidence", "letter_share", "flipped", "tier",
-                              "think_tokens", "probe_tokens", "trace", "prompt_version", "model"}
+                              "think_tokens", "probe_tokens", "trace", "prompt_version", "model", "clarify"}
     assert client.post("/decide/assignment", json={"assignment": ASSIGNMENT, "fields": ["nope"]}).status_code == 422
+
+
+def test_api_reasks_template_and_effort_with_a_fixed_type(api):
+    client, fake = api
+    r = client.post("/decide/assignment", json={"assignment": ASSIGNMENT, "type": "lab_report",
+                                                "fields": ["template", "effort"]})
+    assert r.status_code == 200
+    d = r.json()["decisions"]
+    assert set(d) == {"template", "effort"} and d["template"]["tier"] == "default"
+    assert d["template"]["value"] == "dashboard" and d["effort"]["value"] == "one_solid_session"
+    assert all("Assignment type: Lab report" in q.text for q in fake.kinds("probe"))
+    assert client.post("/decide/assignment", json={"assignment": ASSIGNMENT, "type": "poem"}).status_code == 422
 
 
 def test_api_decide_test(api):

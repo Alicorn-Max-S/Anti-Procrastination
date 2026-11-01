@@ -9,7 +9,7 @@ of lines can be replayed from these records without another model call.
 Proposed lines:
 - expensive fields: the lowest line that accepts zero labeled errors;
 - cheap fields: the lowest line that accepts no more than 10% errors;
-- skip_thinking: every cheap field whose fast-pass error is 10% or less.
+- skip_thinking: every cheap field whose fast-pass error is 10% or less, plus SKIP_THINKING.
 The fast line is scored on what the gate acts on (the forward probe clears it and the reversed probe
 agrees); the think line is replayed on the fields the proposed fast line leaves unsure.
 """
@@ -27,7 +27,7 @@ from statistics import median
 from decider.config import Settings
 from decider.llama import Llama
 from decider.probe import Probe, probe
-from decider.prompts import USES_TYPE, Prompt, choice_for, with_type
+from decider.prompts import TEMPLATE_FROM_TYPE, USES_TYPE, Prompt, choice_for, with_type
 from decider.think import think
 from decisions.fields import ASSIGNMENT_FIELDS, ASSIGNMENT_KIND, QUESTION_FIELDS, Field
 
@@ -37,6 +37,14 @@ RECORDS = EVAL_DATA / "calibrate.jsonl"
 COST = {"type": "expensive", "template": "expensive", "effort": "cheap",
         "format": "cheap", "topic": "expensive", "credit": "expensive"}  # spec, Fields
 CHEAP_MAX_ERROR = 0.10
+# Think lines set by hand instead of by the zero-error rule. Credit stops thinking once a probe is
+# this sure: on the v8 records it keeps the same 24 of 26 right and cuts about a third of the
+# thinking. The same stop costs type and template 4 or 5 right answers each, so they stay at never.
+THINK_STOPS = {"credit": 0.999}
+# Cheap fields that skip thinking by hand, whatever their fast-pass error. Effort: Max, Nov 1. On the
+# v9 records its thinking costs about 12 s per assignment and gains 5 right answers of 191.
+SKIP_THINKING = {"effort"}
+CLARIFY_FIELDS = ("type", "template")  # decider/decide.py: a guessed answer goes to the student
 NEVER = 1.01  # a line no confidence reaches
 OUT_OF_REACH = 2.0  # the think line while recording, so the loop runs to the cap
 BINS = (0.0, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.999, 1.0)
@@ -99,11 +107,12 @@ def current(rec: dict | None, item: Item, f: Field, run: dict, type_answer: str 
             and rec["options"] == [o.value for o in choice_for(f, item.topics).options])
 
 
-def type_answers(items: list[Item], recs: dict[tuple[str, str], dict], run: dict,
+def type_answers(items: list[Item], recs: dict[tuple[str, str], dict], run: dict | None,
                  share_min: float) -> dict[str, str]:
     """System One's own type answer per assignment, under the type lines these records propose:
-    what the decider would put in the template and effort prompts once those lines are approved."""
-    have = {i.key: r for i in items if (r := recs.get((i.key, "type"))) and r["run"] == run}
+    what the decider would put in the template and effort prompts once those lines are approved.
+    `run` None takes each item's latest type record, whatever run made it (the report)."""
+    have = {i.key: r for i in items if (r := recs.get((i.key, "type"))) and (run is None or r["run"] == run)}
     labeled = [{**r, "label": i.labels["type"]} for i in items
                if (r := have.get(i.key)) and "type" in i.labels]
     if not labeled:  # a smoke run with no labeled type: take where thinking ended
@@ -135,18 +144,28 @@ def record_all(llama: Llama, s: Settings, items: list[Item], seed: int, fresh: b
     answers = type_answers(items, load_records(), run, s.letter_share_min)
     have = {} if fresh else load_records()
     todo = []
+    settled = 0
     for i in items:
         fs = []
         for f in i.fields:
             ta = answers.get(i.key) if f.key in USES_TYPE else None
+            if f.key == "template" and from_type(s.template_from_type, ta):
+                settled += "template" in i.labels
+                continue  # the decider asks no template question for this type
             if f.key in i.labels and f.key != "type" and not current(have.get((i.key, f.key)), i, f, run, ta):
                 fs.append(f)
         if fs:
             todo.append((i, fs, answers.get(i.key)))
     total = sum(len(fs) for _, fs, _ in todo)
     rest = sum(len([k for k in i.labels if k != "type"]) for i in items)
-    print(f"pass 2: {total} fields to record ({rest - total} already recorded)", flush=True)
+    print(f"pass 2: {total} fields to record ({rest - total - settled} already recorded, "
+          f"{settled} templates set by the type)", flush=True)
     _record_jobs(llama, s, todo, seed, slots)
+
+
+def from_type(on: bool, type_answer: str | None) -> str | None:
+    """The template the type settles (prompts.TEMPLATE_FROM_TYPE), or None when it's asked."""
+    return TEMPLATE_FROM_TYPE.get(type_answer) if on and type_answer else None
 
 
 def _record_jobs(llama: Llama, s: Settings, todo: list[tuple[Item, list[Field], str | None]], seed: int,
@@ -198,7 +217,7 @@ def _record_jobs(llama: Llama, s: Settings, todo: list[tuple[Item, list[Field], 
 
 @dataclass(frozen=True)
 class Outcome:
-    tier: str  # instant, thought or guessed
+    tier: str  # instant, thought or guessed, as in decider/decide.py
     top: int
     looped: bool  # the thinking loop ran
     cap_hit: bool
@@ -224,11 +243,16 @@ def loop_end(r: dict, line: float, share_min: float) -> Outcome:
 
 
 def decide(r: dict, fast: float, think_line: float, skip: bool, share_min: float) -> Outcome:
+    """The decider's tiers: a loop that ends below the line still counts as thought when Glimmer
+    closed its thinking on the fast pass's own answer."""
     if passes_gate(r, fast, share_min):
         return Outcome("instant", r["forward"]["top"], False, False, 0)
     if skip:
         return Outcome("guessed", r["forward"]["top"], False, False, 0)
-    return loop_end(r, think_line, share_min)
+    o = loop_end(r, think_line, share_min)
+    if o.tier == "guessed" and r["finished"] and o.top == r["forward"]["top"]:
+        return Outcome("thought", o.top, True, False, o.think_tokens)
+    return o
 
 
 def right(r: dict) -> int:
@@ -268,6 +292,8 @@ class FieldPlan:
     fast_error: float  # forward probe's top option vs the label, over every labeled field
     skip: bool
     think_data: bool  # whether any field was left unsure to calibrate the think line on
+    think_fixed: bool = False  # the think line is set by hand (THINK_STOPS)
+    think_rule: float = NEVER  # the think line the zero-error or 10% rule gives
 
 
 def plan_field(field: str, recs: list[dict], share_min: float) -> FieldPlan:
@@ -301,8 +327,11 @@ def plan_field(field: str, recs: list[dict], share_min: float) -> FieldPlan:
     else:
         think_line = fast if fast < NEVER else NEVER
     fast_error = sum(r["forward"]["top"] != right(r) for r in recs) / len(recs)
-    return FieldPlan(field, cost, len(recs), fast, think_line, fast_line(False), fast_error,
-                     cost == "cheap" and fast_error <= CHEAP_MAX_ERROR, bool(cands))
+    fixed = field in THINK_STOPS
+    return FieldPlan(field, cost, len(recs), fast, THINK_STOPS[field] if fixed else think_line,
+                     fast_line(False), fast_error,
+                     cost == "cheap" and (fast_error <= CHEAP_MAX_ERROR or field in SKIP_THINKING),
+                     bool(cands), fixed, think_line)
 
 
 def proposal(plans: list[FieldPlan]) -> dict:
@@ -359,8 +388,13 @@ def field_report(p: FieldPlan, recs: list[dict], share_min: float) -> list[str]:
                f"({_pct(len(instant), p.n)}). Without the reversed check the line would be "
                f"{_line(p.fast_forward_only)}, instant on {len(alone)} ({_pct(len(alone), p.n)}).")
     think_note = "" if p.think_data else " (nothing left unsure to calibrate it on)"
-    out.append(f"  Proposed think line ({rule}): {_line(p.think)}{think_note}."
-               + (" In skip_thinking: its fast-pass error is 10% or less." if p.skip else ""))
+    if p.think_fixed:
+        out.append(f"  Think line set by hand (THINK_STOPS): {_line(p.think)}. The rule ({rule}) "
+                   f"gives {_line(p.think_rule)}{think_note}.")
+    else:
+        out.append(f"  Proposed think line ({rule}): {_line(p.think)}{think_note}."
+                   + ("" if not p.skip else " In skip_thinking: its fast-pass error is 10% or less."
+                      if p.fast_error <= CHEAP_MAX_ERROR else " In skip_thinking by hand (SKIP_THINKING)."))
 
     outs = [(decide(r, p.fast, p.think, p.skip, share_min), r) for r in recs]
     tiers = {}
@@ -374,6 +408,26 @@ def field_report(p: FieldPlan, recs: list[dict], share_min: float) -> list[str]:
     out.append(f"  Under the proposal: {', '.join(tiers.values())}. Accuracy {_pct(ok, p.n)}. "
                f"{len(loops)} thinking loops, {caps} hit the cap ({_pct(caps, len(loops))}), "
                f"median {median([o.think_tokens for o in loops]) if loops else 0:.0f} tokens.")
+    if p.field in CLARIFY_FIELDS:
+        asked = [(o, r) for o, r in outs if o.tier == "guessed"]
+        wrong = sum(o.top != right(r) for o, r in asked)
+        errors = p.n - ok
+        out.append(f"  To clarify (thinking ended off the fast pass's answer, or at the cap): {len(asked)} of "
+                   f"{p.n} ({_pct(len(asked), p.n)}), {wrong} of them wrong ({_pct(wrong, len(asked))}). "
+                   f"That puts {wrong} of the {errors} errors in front of the student.")
+    return out
+
+
+def default_report(defaults: list[tuple[str, str, str]], asked: list[tuple[Outcome, dict]]) -> list[str]:
+    """Templates the type settles: (item key, the default, the label) for each, beside the asked ones."""
+    if not defaults:
+        return []
+    ok = sum(d == label for _, d, label in defaults)
+    asked_ok = sum(o.top == right(r) for o, r in asked)
+    out = [f"  From the type (test, problem set or lab, so no template question): {len(defaults)}, "
+           f"{ok} right ({_pct(ok, len(defaults))}). With them, template accuracy is "
+           f"{_pct(ok + asked_ok, len(defaults) + len(asked))} of {len(defaults) + len(asked)}."]
+    out += [f"    {key}: {d}, labeled {label}" for key, d, label in defaults if d != label]
     return out
 
 
@@ -399,14 +453,21 @@ def skipped_report(items: list[Item], skipped: list[Skipped]) -> list[str]:
     return out
 
 
-def report(items: list[Item], skipped: list[Skipped], share_min: float) -> tuple[str, dict, list[FieldPlan]]:
-    """The printed report, the proposed lines file and the per-field plans, from the records."""
+def report(items: list[Item], skipped: list[Skipped], share_min: float,
+           template_from_type: bool = True) -> tuple[str, dict, list[FieldPlan]]:
+    """The printed report, the proposed lines file and the per-field plans, from the records.
+    With template_from_type, a template the type settles is scored as that default, not as a record."""
     recs = load_records()
+    answers = type_answers(items, recs, None, share_min)
     by_field: dict[str, list[dict]] = {}
+    defaults: list[tuple[str, str, str]] = []
     missing = 0
     for item in items:
         for f in item.fields:
             if f.key not in item.labels:
+                continue
+            if f.key == "template" and (d := from_type(template_from_type, answers.get(item.key))):
+                defaults.append((item.key, d, item.labels[f.key]))
                 continue
             r = recs.get((item.key, f.key))
             if r is None or item.labels[f.key] not in r["options"]:
@@ -420,8 +481,12 @@ def report(items: list[Item], skipped: list[Skipped], share_min: float) -> tuple
     plans = []
     for f in ASSIGNMENT_FIELDS + QUESTION_FIELDS:
         if f.key in by_field:
-            plans.append(plan_field(f.key, by_field[f.key], share_min))
-            out += field_report(plans[-1], by_field[f.key], share_min)
+            p = plan_field(f.key, by_field[f.key], share_min)
+            plans.append(p)
+            out += field_report(p, by_field[f.key], share_min)
+            if f.key == "template":
+                out += default_report(defaults, [(decide(r, p.fast, p.think, p.skip, share_min), r)
+                                                 for r in by_field[f.key]])
         else:
             out.append(f"\n== {f.key} ({COST[f.key]}): no records, so no line (the decider keeps 0.85) ==")
     prop = proposal(plans)

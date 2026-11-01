@@ -49,6 +49,9 @@ class AssignmentRequest(BaseModel):
     assignment: AssignmentIn
     fields: list[str] | None = None
     seed: int | None = None  # fixed sampling seed for the thinking loops (eval runs)
+    # A type the student fixed in the clarify window: not decided again, and template and effort
+    # are re-asked with it (send fields ["template", "effort"]).
+    type: str | None = None
 
 
 class QuestionIn(BaseModel):
@@ -86,12 +89,13 @@ class Decision(BaseModel):
     confidence: float
     letter_share: float
     flipped: bool | None
-    tier: Literal["instant", "thought", "guessed"]
+    tier: Literal["instant", "thought", "guessed", "default"]
     think_tokens: int
     probe_tokens: int
     trace: list[TraceEntry]
     prompt_version: str
     model: str
+    clarify: bool = False  # goes on the student's clarify list (a guessed type or template)
 
 
 class AssignmentResponse(BaseModel):
@@ -129,7 +133,7 @@ def _run(fn, *args, **kwargs) -> dict:
 
 @app.post("/decide/assignment", response_model=AssignmentResponse)
 def decide_assignment(body: AssignmentRequest) -> dict:
-    return _run(decider().decide_assignment, body.assignment.model_dump(), body.fields, body.seed)
+    return _run(decider().decide_assignment, body.assignment.model_dump(), body.fields, body.seed, body.type)
 
 
 @app.post("/decide/test", response_model=TestResponse)

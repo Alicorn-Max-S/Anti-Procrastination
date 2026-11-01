@@ -76,9 +76,9 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
         Option("something_else", "Something else",
                "anything else: a form, survey, signature, participation grade, test corrections, a "
                "class discussion, something to bring to class, a quick reflection exit ticket, a "
-               "small check-in on a project, first-day paperwork (reading the syllabus and filling "
-               "out a sheet about yourself), or organizing notes, a journal or a binder (including "
-               "an ungraded review-and-organize packet)"),
+               "small check-in on a project, first-day paperwork (a question sheet to fill out and "
+               "the syllabus), or organizing your notes or binder, including a review-and-organize "
+               "(RAO) packet"),
     ), rules=(
         "A part of a multi-part project stays Project or presentation, even when that part is a "
         "reading.",
@@ -118,8 +118,8 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
     Field("template", "Which prep doc template fits best?", (
         Option("document", "Document",
                "a document or linked documents to read through; the usual pick for a reading in a "
-               "humanities class (English or history) that's about the class's subject, and for a "
-               "podcast or other audio"),
+               "humanities class (English or history) that's about the class's subject and read "
+               "outside class, and for a podcast or other audio"),
         Option("checklist", "Checklist",
                "steps to tick off one by one; the usual pick for problem sets, worksheets, projects, "
                "journals or responses written on the spot with no prep time, and shorter writing with "
@@ -131,8 +131,8 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "participation grades, and projects done mainly in class"),
         Option("cornell", "Cornell",
                "Cornell notes: cue questions beside notes and a summary, for a lesson, a video, or "
-               "any other reading: a science or other non-humanities reading, a syllabus, or "
-               "assignment instructions to look over"),
+               "any other reading: one done in class, a science or other non-humanities reading, a "
+               "syllabus, or assignment instructions to look over"),
         Option("quick", "Quick task",
                "one small action with nothing to prep: a form, survey (including a post-test survey), "
                "signature, reflection exit ticket, reminder to submit missing work, or a project idea, "
@@ -169,14 +169,15 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "spread over two or three sittings, like studying for a quiz, mini-quiz exit ticket, "
                "reading check, pretest or assessment (not a test) or a short project with a few parts"),
         Option("multi_day", "Multi-day",
-               "worked on across many days, like studying for a test/final, an essay, in-class work "
-               "the student can prepare for, or a long project"),
+               "worked on across many days, like studying for a test/final, an essay, an in-class "
+               "essay or writing assessment, a graded discussion, or a long project"),
     ), rules=(
-        "Effort goes by what the item is, not by minutes. For anything the student studies or preps "
-        "for, the prep decides, even when the item has few questions or happens in class: a quiz, "
-        "reading check or mini-quiz exit ticket is Two or three sessions; a test is Multi-day, and "
-        "so is in-class work the student can prepare for, like an in-class writing (not a quick "
-        "write) or a graded discussion. A separate assignment to prepare for it goes by its own size.",
+        "Effort goes by what the item is, not by minutes. A separate assignment to prepare for "
+        "something goes by its own size. For anything the student studies or preps for, the prep "
+        "decides, even when the item has few questions or happens in class: a quiz, reading check or "
+        "mini-quiz exit ticket is Two or three sessions, and so is a small quiz like an examencito; "
+        "a test is Multi-day, and so is an in-class essay or writing assessment, or a graded "
+        "discussion.",
         "An essay (an assignment called an essay) is Multi-day. A piece of one, like a single body "
         "paragraph, and shorter writing like a journal, response or poem go by their size.",
         "A project or presentation is Two or three sessions or Multi-day, by its scale. A piece of "

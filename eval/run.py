@@ -47,7 +47,8 @@ def run_calibrate(args: argparse.Namespace) -> None:
     items = items[:args.limit] if args.limit else items
     if not (args.report or args.approve):
         calibrate.record_all(llama_up(), settings, items, args.seed, args.fresh, args.slots)
-    text, prop, _ = calibrate.report(items, skipped, settings.letter_share_min)
+    text, prop, _ = calibrate.report(items, skipped, settings.letter_share_min,
+                                     settings.template_from_type)
     print(text)
     EVAL_DATA.mkdir(parents=True, exist_ok=True)
     (EVAL_DATA / "calibrate-report.txt").write_text(text + "\n", encoding="utf-8")

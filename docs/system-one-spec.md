@@ -43,7 +43,7 @@ Part B only starts if the go/no-go check in Part C passes.
   - Test questions: Spark reads each uploaded test once with the grader's page prompt, cached in `data/eval/tests/<id>.json`. Marks as written combine marks_seen, the written points (earned/possible or -lost) and, for a question alone in its section, the section score. Calc and physics rows matched the labels one to one. Spanish IV was labeled per blank (45) where Spark reads per question (37): a `question_map` joins blanks to rows, and a row whose blanks got different credit counts as partial.
   - Spark misread 4 marks, checked against the page photos and fixed as `corrections` in the cache files: Spanish C4, C7 and C9 have -1 and then +1 (Spark missed the +1), and physics 6 says 7/7 (Spark read 4/7).
   - Calibrate runs on 4 llama-server slots (`-np 4 -c 32768`): 2.13 s per field against 4.15 s on 1 slot. Prompt caching works as in Part A. Batched decoding can change the last digits of a probability, so calibrate's numbers can differ slightly from the 1-slot decider's.
-- Lines (decisions/lines.json), approved by Max Nov 1 from the prompt-version-2 calibration (744 labeled fields: 197 assignments, 51 test questions; the zero-error rule held as specced):
+- Lines now: the v9 lines with effort skipping thinking, approved by Max Nov 1 (v9 results below). The first approved lines, from the prompt-version-2 calibration, are kept in `data/eval/lines.v2.json` (744 labeled fields: 197 assignments, 51 test questions; the zero-error rule held as specced):
 
   | Field | Cost | Fast line | Think line | Instant on calibration | Fast-pass error |
   |---|---|---|---|---|---|
@@ -57,7 +57,7 @@ Part B only starts if the go/no-go check in Part C passes.
   - No think line is possible on any field. When the thinking closes, the probe is ≥ 0.999 on wrong answers as well as right ones (every wrong answer on every field), so no line accepts zero labeled errors, or 10% or less for the cheap fields. A field that isn't instant thinks to its end and comes out `guessed`. Nothing hit the cap (512 tokens); the median loop was about 100–190 tokens.
   - The reversed probe changed only credit's instant share, from 47% to 43%. It never lowered a line.
   - Type's zero-error line is set by one label (assignment 16004, a problem set the model calls something else at 0.99976). Allowing one labeled error would make type 35% instant.
-- Cheap fields that skip thinking: none. Effort's fast-pass error is 67% and format's is 23.5%, both over the 10% rule.
+- Cheap fields that skip thinking (v2): none. Effort's fast-pass error is 67% and format's is 23.5%, both over the 10% rule. Now (v9): format by the rule (fast-pass error 3.9%), and effort by hand (`SKIP_THINKING` in `eval/calibrate.py`), though its fast-pass error is 25.7%.
 - Compare, Nov 1 (`eval/summary.md`, `eval/results.csv`, `eval/compare.png`). Glimmer on 1 slot as in production, seed 7, prompt version 2. Spark used 182k input and 378k output tokens (372k of them reasoning, at its default effort) on 248 calls: $1.81.
 
   | Setup | Accuracy | Expensive | Cheap | Seconds per item | Cost per 1,000 items |
@@ -76,9 +76,63 @@ Part B only starts if the go/no-go check in Part C passes.
   - 4: a new type, video or audio. Test corrections and "Receta" moved to something else, and tests and quizzes always get Dashboard.
   - 5: Max's Nov 1 rules ("System One v5 changes for Claude Code"). New type, template and effort definitions, `TEMPLATE_DEFAULTS` as one line per type, an effort rule line (`Field.rules`, printed above the examples), and 7 more examples. Its credit wording ("no points lost by the score") dropped credit from 96% to 84%: Glimmer answered "can't tell" on no-mark questions labeled full.
   - 6: v5 with the v2 credit wording. Only the credit question changed, so the other v5 records were carried over unchanged. The 51 credit fields and the 51 test questions for Spark and Glimmer were re-run.
-  - 7 (current): System One asks type first, then template and effort with its own type answer in the prompt (`USES_TYPE`, `with_type` in `decider/prompts.py`). Before this the three were asked blind, unlike Spark and base Glimmer, which answer all three in one reply; reflection exit tickets got "two or three sessions" because the effort question couldn't tell them from mini quizzes. Calibrate records type for every assignment first (held-out ones too), works out System One's type answer under the type lines it proposes, then records template and effort with that answer (`type_answer` in each record). Also Max's second round of Nov 1 rules: exit tickets (reflection → quick, prep → dashboard), labs always dashboard, surveys and missing-work reminders → quick, audio → document, readings → document only in a humanities class on the class's subject, a type rule for project parts, and four effort rules (prep, essays, projects, links vs attachments). 18 relabels, listed in the rules doc; the pre-v7 labels are in `data/labeling/labels.backup-20261101-pre-v7.jsonl`.
+  - 7: System One asks type first, then template and effort with its own type answer in the prompt (`USES_TYPE`, `with_type` in `decider/prompts.py`). Before this the three were asked blind, unlike Spark and base Glimmer, which answer all three in one reply; reflection exit tickets got "two or three sessions" because the effort question couldn't tell them from mini quizzes. Calibrate records type for every assignment first (held-out ones too), works out System One's type answer under the type lines it proposes, then records template and effort with that answer (`type_answer` in each record). Also Max's second round of Nov 1 rules: exit tickets (reflection → quick, prep → dashboard), labs always dashboard, surveys and missing-work reminders → quick, audio → document, readings → document only in a humanities class on the class's subject, a type rule for project parts, and four effort rules (prep, essays, projects, links vs attachments). 18 relabels, listed in the rules doc; the pre-v7 labels are in `data/labeling/labels.backup-20261101-pre-v7.jsonl`. A 19th relabel ("Founding documents" template → document, by the reading rule) came after the backup.
+  - 8: v7's Something else wording ("organizing notes, a journal or a binder (including an ungraded review-and-organize packet)") pulled journals, a quick write and ungraded problem sets into Something else after thinking, though the fast pass had them right. v8 drops "journal" and "ungraded". Only the type options changed, so the v7 records of every other field were carried over and only type, plus the 49 template and effort fields whose type answer changed, were re-recorded.
+  - 9 (current): a usual template line for Something else ("Quick task if it's one small action with nothing to prep, Dashboard for a participation grade, otherwise Checklist"; the Dashboard part was added after the v9 run, when both "Participación" items came out Quick task and Checklist, and Max kept it in v9 since one change isn't a new version, so the v9 template records predate it); a reading done in class gets Cornell, and Document needs a humanities reading on the class's subject read outside class (Max: "In-Class: Poetry Groups" is Cornell because it's in class); the in-class effort rule now opens with "a separate assignment to prepare for something goes by its own size", names its multi-day cases outright (an in-class essay or writing assessment, a graded discussion) and adds "a small quiz like an examencito is Two or three sessions". Three relabels: "Objetivos de la Colonización" template → dashboard (it's typed essay now), "Founding documents" template back to cornell (read in class, so the 19th relabel above is undone), and "HW 8.1 … Khan Activities" template checklist → cornell (it stays video or audio).
+- Nov 1 decision changes, from Claude's review of the v8 records (in the decider and calibrate, measured in the v9 results below):
+  - Clarify: only a type or template whose thinking ended off the fast pass's answer, or hit the cap, goes on the clarify list (`clarify` in the decision). A guessed effort gets the badge but no question. Topic and credit keep thinking's answer: on credit, when thinking disagrees with the fast pass it's right 7 times in 9. A loop that closes below the line on the fast pass's own answer is now `thought`, not `guessed`.
+  - Re-ask: a type the student fixes in the clarify window goes back in as `type`, and template and effort are decided again with it.
+  - Credit stops thinking once a probe reaches 0.999 (`THINK_STOPS` in `eval/calibrate.py`, written to the proposal as credit's think line). On the v8 records it keeps the same 24 of 26 right and cuts about a third of the thinking. The same stop costs type and template 4 or 5 right answers each, so they stay at never.
+  - Template from the type: a test or quiz, problem set or worksheet, or lab report gets its usual template (dashboard, checklist, dashboard) with no template question, tier `default` (`TEMPLATE_FROM_TYPE=1`; `0` asks it). Calibrate skips those template records and the report scores them as the default.
+- v9 results, System One from the calibration (`data/eval/calibrate-report.v9.txt`, lines in `data/eval/proposal.v9.json`). Both columns are the v8 and v9 records scored on the current labels under the Nov 1 decision rules, each with its own fitted lines. "No question" is instant, plus `default` for template.
+
+  | Field | System One v8 → v9 | No question v8 → v9 | Thinking median v8 → v9 |
+  |---|---|---|---|
+  | type | 174 → 173 of 189 (92%) | 40% → 41% | 169 → 178 tokens |
+  | template | 167 → 167 of 190 (88%) | 63% → 52% (17 instant, 81 from the type) | 215 → 180 |
+  | effort | 148 → 147 of 191 (77%) | 35% → 32% | 275 → 251 (cap 10 → 7) |
+  | format | 49 → 49 of 51 | 98% → 98% | none |
+  | topic | 50 → 50 of 51 | 92% → 94% | 268 → 248 |
+  | credit | 49 → 49 of 51 | 49% → 49% | 221 → 117 |
+
+  - Accuracy didn't move on any field. The targeted fixes landed: "Examencito (F)" and "Reading Check 1" are Two or three sessions, "PREPARATION for in-class essay" and "Prepare for your Unit 1 In-Class Writing Assessment" get Checklist, "Founding documents" gets Cornell, the SCAFFOLDING doc and both "Strands of Democracy" parts are One solid session. An equal number of nearby answers flipped the other way, mostly one short sitting vs one solid session on homework, and "Unit 1 Project" and "Read Dickinson's Poems" on effort.
+  - Template from the type: 81 of 190 templates need no question, 80 right. The miss is "HW 8.1 … Khan Activities", labeled video or audio, which System One types a problem set, so it gets Checklist.
+  - Both "Participación" items (type Something else, template labeled dashboard) now come out Quick task and Checklist: the new Something else line names only those two.
+  - Clarify: 17 type questions catch 7 of the 16 type errors, and 23 template questions catch 14 of the 22 errors on asked templates. That's 40 questions over 197 assignments, 19 of them on an answer that was already right. The other 17 errors show "Thought it over".
+  - Credit's 0.999 stop halves its thinking at the same 49 of 51. It fixes one answer ("q8+q9+q10" → partial) and breaks one ("q22" → none).
+  - Proposed v9 lines: type 0.9987, template 0.9977, effort 0.988, format 0.64 (think 0.99, skip thinking), topic 0.86, credit 0.86 (think 0.999); every other think line never. Approved by Max Nov 1 and written to `decisions/lines.json`, with effort added to `skip_thinking`: on the v9 records effort goes from 147 to 142 right of 191 and saves about 12 s of thinking per assignment on 1 slot. System One now runs on 4 slots (`PARALLEL_SLOTS=4`).
+- Compare, prompt version 9, Nov 1 (`eval/summary.md`, `eval/results.csv`, `eval/compare.png`; copies and records in `data/eval/compare-outputs.v9/` and `data/eval/compare.v9/`). All three setups re-run on the same labels. Glimmer on 1 slot as in production, seed 7. System One full used the proposed v9 lines (`LINES_FILE=data/eval/proposal.v9.json`), since `decisions/lines.json` is still v2. The Dashboard part of the Something else template line was in the prompt for this run. Spark: 590k input tokens (148k cached) and 393k output (387k reasoning) on 248 calls, $2.24.
+
+  | Setup | Accuracy | Expensive | Cheap | Seconds per item | Cost per 1,000 items |
+  |---|---|---|---|---|---|
+  | All Spark | 88.8% | 92.1% | 82.2% | 5.30 | $9.04 |
+  | Base Glimmer | 87.6% | 90.0% | 82.6% | 9.31 | $2.85 |
+  | System One, fast pass only | 83.3% | 86.1% | 77.7% | 1.02 | $0.31 |
+  | System One, full | 87.7% | 91.5% | 80.2% | 11.38 | $3.48 |
+
+  - By field (Spark / base Glimmer / fast pass / System One): type 92.1 / 92.6 / 88.4 / 93.1, template 89.5 / 87.4 / 84.7 / 86.3, effort 78.0 / 79.1 / 72.8 / 75.9, format 98.0 / 96.1 / 96.1 / 96.1, topic 98.0 / 100 / 96.1 / 98.0, credit 96.1 / 80.4 / 72.5 / 98.0.
+  - From v6 (Spark 83.8%, base Glimmer 83.5%), every setup gained 4–5 points from the v7–v9 prompts and relabels. System One full ties base Glimmer overall and leads on the expensive fields (91.5% vs 90.0%), mostly from credit (98.0 vs 80.4). It trails on effort (75.9 vs 79.1) and template (86.3 vs 87.4).
+  - Speed splits by item kind. Assignments: Spark 5.6 s mean, base Glimmer 9.3 s, System One 13.3 s (median 12.1, 31 of 197 with no thinking at 1.5 s; the fast pass alone is 1.08 s). Test questions: Spark 4.3 s, base Glimmer 9.4 s, System One 4.1 s, since it reads the whole test in one call.
+  - Tiers: 38% instant, 38% thought, 13% guessed, 11% from the type; 365 thinking loops, 16 at the cap. Clarify asks 43 questions (22 type, 21 template) over 197 assignments, 19 of them on wrong answers.
+  - The v9 lines and the option definitions were fitted on this same labeled set, so System One's numbers are in-sample. Calibrate's System One numbers (type 173, template 167) differ a little from compare's (176, 164) because calibrate ran on 4 slots and batched decoding changes the last digits of probabilities.
+- v8 results, System One from the calibration (`data/eval/calibrate-report.v8.txt`, lines in `data/eval/proposal.v8.json`). Both columns are scored on the current labels with lines fitted on those labels, so the v6 numbers differ from the v6 table below.
+
+  | Field | System One v6 → v8 | Instant v6 → v8 |
+  |---|---|---|
+  | type | 91 → 92 | 26% → 40% |
+  | template | 85 → 88 | 15% → 63% |
+  | effort | 70 → 77 | 27% → 35% |
+  | format | 92 → 96 | 94% → 98% |
+  | topic | 96 → 98 | 92% → 92% |
+  | credit | 96 → 96 | 43% → 49% |
+  | all | 85 → 88 | |
+
+  - Proposed v8 lines: type 0.999, template 0.9918, effort 0.9852, format 0.73 (think 0.97, skip thinking), topic 0.9, credit 0.82; every other think line never. Not approved, so `decisions/lines.json` is still v2. Base Glimmer and Spark have not been re-run on v7 or v8 (the shared system turn changed, so their v6 numbers are stale).
+  - Template instant went from 15% to 63% with zero labeled errors: with the type answer in the prompt, Glimmer is sure of the template far more often.
+  - The cost of chaining: a wrong type now carries into template. "Arrays and Tables", "Working with Functions" and "Países de habla Hispana" are typed Something else and so get Quick task.
+  - New effort misses from the in-class rule: "Examencito (F)", "PREPARATION for in-class essay" and the SCAFFOLDING doc (which mentions a coming in-class writing) now come out multi-day. Two calc handouts "attached here" went to one solid session under the attachment rule.
   - Max relabeled on Nov 1 (931+ rows in `labels.jsonl`). 21 labels are held out as example sources.
-- v6 results (`data/eval/calibrate-report.v6.txt`; `eval/summary.md` now holds the v6 Spark and Glimmer compare). v2 is its records re-scored on the current labels.
+- v6 results (`data/eval/calibrate-report.v6.txt`; the v6 Spark and Glimmer compare is in `data/eval/compare-outputs.v6/`). v2 is its records re-scored on the current labels.
 
   | Field | System One v2 → v6 | System One instant | Base Glimmer v2 → v6 | Spark v2 → v6 |
   |---|---|---|---|---|
@@ -113,7 +167,7 @@ Graded test photo ──> Spark reads rows ────────────�
                               ┌────────────────┬───────────────────┼─────────────────────┐
                               v                v                   v                     v
                         Spark prep         scheduler          topic grid           clarify list
-                     (type, template)      (effort)    (format, topic, credit)  (guessed expensive fields)
+                     (type, template)      (effort)    (format, topic, credit)  (guessed type or template)
 ```
 
 The decision loop runs inside the decider, on the same machine as llama-server. The backend makes one HTTP call per assignment, or one per test. Where the decider runs is just config (`DECIDER_URL`), so it can move to a VPS or Modal later without code changes.
@@ -121,12 +175,12 @@ The decision loop runs inside the decider, on the same machine as llama-server. 
 ## Serving
 
 ```
-llama-server -m Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf -ngl 99 -c 16384 -np 1 --swa-full --jinja --host 127.0.0.1 --port 8080
+llama-server -m Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf -ngl 99 -c 32768 -np 4 --swa-full --jinja --host 127.0.0.1 --port 8080
 ```
 
 - Load no mmproj, since Glimmer only sees text. Load no DFlash drafter.
 - `--swa-full` is required. Without it, rolling the cache back after a probe fails on the sliding-window layers, and the log shows "forcing full prompt re-processing".
-- Parallel thinking is optional and off by default. To enable it, run `-np N -c 16384*N`, and the decider pins each concurrent thinking loop to its own slot with `id_slot`. The setting is `PARALLEL_SLOTS`, default 1.
+- Thinking loops run in parallel, one slot each: the decider pins each concurrent loop to its own slot with `id_slot`. The setting is `PARALLEL_SLOTS`, default 4 since Nov 1 (it was 1); llama-server needs `-np` at least that. `-c 32768` gives each of 4 slots 8,192 tokens. The longest prompt in the v9 runs was 3,555 tokens, plus at most 512 of thinking. For 1 slot, run `-np 1 -c 16384` with `PARALLEL_SLOTS=1`.
 - Stop the ninfer Qwen server before starting this one. The two do not fit in 24 GB together.
 - Never expose llama-server outside the machine.
 
@@ -193,23 +247,23 @@ Test-question fields:
 1. Run a forward probe with empty thinking.
 2. If `confidence >= lines[field].fast` and `letter_share >= 0.5`, run a reversed-order probe: list the options in reverse and reassign the letters. Act only if the reversed probe picks the same option and also has `letter_share >= 0.5`. The tier is `instant`.
 3. Anything else is unsure. When the forward probe already fails, skip the reversed probe.
-4. If the field is unsure and it is in `skip_thinking` (a cheap field whose fast-pass error was 10% or less on the labels), take the forward probe's top option. The tier is `guessed`.
+4. If the field is unsure and it is in `skip_thinking` (a cheap field whose fast-pass error was 10% or less on the labels, or one set by hand: effort), take the forward probe's top option. The tier is `guessed`.
 5. Every other unsure field goes to the thinking loop.
 
 ## Thinking loop
 
 - Generate thinking with `POST /completion` and `{n_predict: 96, stop: ["\n\n"], temperature: 1.0, top_p: 0.95, top_k: 64, return_tokens: true}`. Use a fixed seed in eval runs. Append the `"\n\n"` stop text back onto the thinking.
-- If the returned tokens contain `<|eom|>` or `<|eot|>`, truncate there: Glimmer has finished thinking. Run one final probe and use its answer. The tier is `thought` if it clears the line, otherwise `guessed`.
+- If the returned tokens contain `<|eom|>` or `<|eot|>`, truncate there: Glimmer has finished thinking. Run one final probe and use its answer. The tier is `thought` if it clears the line or picks the fast pass's forward answer, otherwise `guessed`.
 - If a chunk is under 24 tokens, generate another chunk before probing.
 - Probe after each paragraph, checking confidence and letter_share. Do not run the reversed probe inside the loop.
 - Stop as soon as `confidence >= lines[field].think` and `letter_share >= 0.5`. The tier is `thought`.
 - The cap: only start a new paragraph while the total thinking tokens are under 512. The paragraph already in progress always finishes, so the worst case is about 600 tokens.
-- At the cap, if the field is still below the line, take the top option. The tier is `guessed`.
+- At the cap, if the field is still below the line, take the top option. The tier is `guessed`, even when it's the fast pass's answer.
 - Never stop because consecutive probes agree. Stop on confidence only.
 
 ## Topic naming
 
-This applies when the topic field decides on "none of these fit" with tier `instant` or `thought`.
+This applies when the topic field decides on "none of these fit" instantly, or by a thinking probe that clears the think line. A loop that only closes on the fast pass's answer is `thought` but doesn't name a topic.
 
 - Send a naming request. The question is: "None of the listed topics fit. Write a short topic name (6 words or fewer). If a listed topic is close, write that one exactly." Open the answer turn directly. Settings: `n_predict: 16, temperature: 0, stop: ["\n"]`.
 - If the result matches an existing topic (case-insensitive), use that topic. Otherwise add it to the class list for the rest of this test, and return it in `new_topics`.
@@ -219,18 +273,21 @@ This applies when the topic field decides on "none of these fit" with tier `inst
 A FastAPI app in `decider/`, running as a separate process.
 
 - `GET /health` returns `{ok, llama_ok, build}`.
-- `POST /decide/assignment` takes `{assignment: {...}, fields?: [names]}` and returns `{decisions: {field: Decision}, timings}`. It runs type first (fast pass, then thinking if unsure), then template and effort with the type answer in their prompt. Type is decided even when only template or effort is asked for.
+- `POST /decide/assignment` takes `{assignment: {...}, fields?: [names], type?: value}` and returns `{decisions: {field: Decision}, timings}`. It runs type first (fast pass, then thinking if unsure), then template and effort with the type answer in their prompt. Type is decided even when only template or effort is asked for. `type` is a type the student fixed: it isn't decided again or returned, and template and effort use it. When the type is test or quiz, problem set or worksheet, or lab report, the template isn't asked: it's that type's usual template (`TEMPLATE_FROM_TYPE` in `decider/prompts.py`) with tier `default`.
 - `POST /decide/test` takes `{class_id, topics: [...], questions: [{id, text, answer, marks, note, points}], fields?}` and returns `{decisions: {question_id: {field: Decision}}, new_topics: [...], timings}`. It runs the questions in order: the fast pass for every field first, then the thinking loops for the unsure ones. Loops run in parallel only when `PARALLEL_SLOTS > 1`.
 
 A `Decision` is:
 
 ```
 {value, option_index, confidence, letter_share, flipped: bool|null,
- tier: "instant"|"thought"|"guessed", think_tokens, probe_tokens,
- trace: [{think_tokens, probs: {option: p}, letter_share}], prompt_version, model}
+ tier: "instant"|"thought"|"guessed"|"default", think_tokens, probe_tokens,
+ trace: [{think_tokens, probs: {option: p}, letter_share}], prompt_version, model,
+ clarify: bool}
 ```
 
-Config comes from environment variables: `GLIMMER_URL`, `PARALLEL_SLOTS=1`, `CAP_TOKENS=512`, `PARAGRAPH_MAX=96`, `MIN_PROBE_CHUNK=24`, `LETTER_SHARE_MIN=0.5`, `LINES_FILE=decisions/lines.json`, `PROMPT_VERSION`.
+`clarify` is true for a `guessed` type or template: thinking ended on another answer than the fast pass's, or ran to the cap (or the field is in `skip_thinking`). A `default` template has no trace.
+
+Config comes from environment variables: `GLIMMER_URL`, `PARALLEL_SLOTS=4`, `CAP_TOKENS=512`, `PARAGRAPH_MAX=96`, `MIN_PROBE_CHUNK=24`, `LETTER_SHARE_MIN=0.5`, `LINES_FILE=decisions/lines.json`, `PROMPT_VERSION`, `TEMPLATE_FROM_TYPE=1`.
 
 The lines file looks like `{"lines": {field: {"fast": x, "think": y}}, "skip_thinking": [fields]}`. Until calibration runs, every field uses fast 0.85 and think 0.85, and `skip_thinking` is empty.
 
@@ -242,7 +299,7 @@ The decisions table:
 |---|---|
 | Identity | `id`, `item_kind` (assignment or test_question), `item_id`, `field` |
 | Answer | `value`, `option_index`, `confidence`, `letter_share`, `flipped` |
-| How it was decided | `tier` (instant, thought, guessed, rule or confirmed), `think_tokens`, `probe_tokens`, `trace` (JSON) |
+| How it was decided | `tier` (instant, thought, guessed, default, rule or confirmed), `clarify`, `think_tokens`, `probe_tokens`, `trace` (JSON) |
 | Versioning | `prompt_version`, `model` |
 | Confirmation | `confirmed_value`, `confirmed_at` |
 | Timestamps | `created_at`, `updated_at` |
@@ -269,16 +326,17 @@ Test flow:
 
 The card badge:
 
-- `instant` shows "Decided instantly", `thought` shows "Thought it over", and `guessed` shows "Best guess". `rule` shows no badge.
+- `instant` shows "Decided instantly", `thought` shows "Thought it over", `guessed` shows "Best guess", and `default` shows "Set by the type". `rule` shows no badge.
 - Tapping the badge opens a panel with the probability bars from the last trace entry. For fields with tier `thought` or `guessed`, it also shows the belief curve: the top option's probability against thinking tokens.
 - A cheap field with tier `guessed` only gets a small flag on the card.
 
 Clarify:
 
-- The cards screen shows a count of guessed expensive fields ("2 to check"). Tapping it opens a list showing each field's top two options and a dismiss button. No banners, no popups, no push notifications.
+- The cards screen shows a count of decisions with `clarify` set ("2 to check"): a type or template whose thinking ended off the fast pass's answer or hit the cap. Tapping it opens a list showing each field's top two options and a dismiss button. No banners, no popups, no push notifications.
+- A guessed effort gets the badge and flag but no question. Topic and credit never go on the list: thinking's answer stands.
 - An item expires when its assignment's start time passes or the assignment is completed. A dismissed item never comes back.
 - After a test upload, the same list appears inline at the bottom of the results.
-- Answering sets the tier to `confirmed`. A changed type or template re-runs Spark prep. A changed topic or credit updates the grid. A changed effort reschedules the block.
+- Answering sets the tier to `confirmed`. A changed type re-asks template and effort first: `POST /decide/assignment` with `type` set to the student's answer and `fields: ["template", "effort"]`. The answers overwrite the rows unless they're confirmed, and a template the new type settles comes back as `default`. Then a changed type or template re-runs Spark prep. A changed topic or credit updates the grid. A changed effort reschedules the block.
 
 ## Part C: eval harness
 
@@ -292,7 +350,9 @@ Clarify:
 - It proposes settings:
   - Expensive fields: the lowest line that accepts zero labeled errors.
   - Cheap fields: the lowest line that accepts no more than 10% errors.
-  - `skip_thinking`: every cheap field whose fast-pass error is 10% or less.
+  - `skip_thinking`: every cheap field whose fast-pass error is 10% or less, plus the ones in `SKIP_THINKING` (effort, by Max's call on Nov 1).
+  - A think line in `THINK_STOPS` is set by hand instead (credit 0.999); the report shows what the rule would give.
+- Template and effort are recorded with System One's type answer, and a template the type settles isn't recorded: the report scores it as the default. For type and template it also counts what would go to clarify and how many errors that catches.
 - It prints the proposal and waits for Max's approval before writing `decisions/lines.json`.
 - Go/no-go is Max's call, made from this report. If the expensive fields can't be decided instantly at any useful rate, and the reversed-order check doesn't fix that, Part B is skipped.
 
