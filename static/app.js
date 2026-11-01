@@ -20,7 +20,7 @@ let state = null;
 let serverOffset = 0; // the server's clock (maybe simulated) minus this device's, in ms
 let cards = [];
 let lastSyncSeen;
-let renderedKeys = { checkin: "", week: "" };
+let renderedKeys = { checkin: "", week: "", avail: "" };
 let movedIds = new Set();
 let notified = new Set(); // "blockId:status" already announced
 let firstPoll = true;
@@ -118,6 +118,7 @@ async function refresh(reloadCards = false) {
   renderSync();
   renderCheckin();
   renderWeek();
+  renderAvailability();
   notifyNew();
   updateNotify();
   updateTitle();
@@ -454,7 +455,11 @@ async function answer(blockId, ans, pickedTime) {
 // ---- week --------------------------------------------------------------------------------------
 
 function renderWeek() {
-  const key = JSON.stringify([state.week_start, state.blocks.map((b) => [b.id, b.start, b.status, b.at_risk])]);
+  const key = JSON.stringify([
+    state.week_start,
+    state.blocks.map((b) => [b.id, b.start, b.status, b.at_risk]),
+    state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note]),
+  ]);
   if (key === renderedKeys.week) return;
   renderedKeys.week = key;
   const first = new Date(state.week_start);
@@ -469,6 +474,8 @@ function renderWeek() {
     ...days.map((d, i) => {
       const col = el("div", `day${i === 0 ? " today" : ""}`);
       col.append(el("h3", null, i === 0 ? `Today · ${fmtDay(d)}` : fmtDay(d)));
+      const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
+      state.availability.filter((a) => new Date(a.start) < dayEnd && new Date(a.end) > d).forEach((a) => col.append(spanStrip(a, d, dayEnd)));
       byDay[i].forEach((b) => col.append(blockEl(b)));
       if (!byDay[i].length) col.append(el("p", "muted small", "Free"));
       return col;
@@ -489,6 +496,164 @@ function blockEl(b) {
   n.addEventListener("click", () => openDoc(b.assignment_id));
   return n;
 }
+
+// ---- when you can and can't work ----------------------------------------------------------------
+// The text box asks the server to read what was said (nothing changes yet), shows the spans it
+// found for a yes, and only then posts them; the form posts a span directly. Either way the server
+// moves the planned blocks at once and answers with what moved.
+
+const KIND_TEXT = { off: "Can't work", open: "Can work" };
+
+// "Tue 5:00 PM–12:00 AM", or "Mon 2:00 PM–Tue 9:00 AM" when it crosses midnight.
+function spanText(a) {
+  const s = new Date(a.start);
+  const e = new Date(a.end);
+  const sameDay = startOfDay(s).getTime() === startOfDay(new Date(e.getTime() - 1)).getTime();
+  return `${fmtDayTime(s)}–${sameDay ? fmtTime(e) : fmtDayTime(e)}`;
+}
+
+// One day's slice of a span, on the week grid.
+function spanStrip(a, dayStart, dayEnd) {
+  const from = new Date(Math.max(new Date(a.start), dayStart));
+  const to = new Date(Math.min(new Date(a.end), dayEnd));
+  const all = to - from >= 86_400_000 - 60_000;
+  const text = `${KIND_TEXT[a.kind]} ${all ? "all day" : `${fmtTime(from)}–${fmtTime(to)}`}`;
+  const n = el("div", `avail-strip ${a.kind}`, a.note ? `${text} · ${a.note}` : text);
+  n.title = `${KIND_TEXT[a.kind]}: ${spanText(a)}${a.note ? ` (${a.note})` : ""}`;
+  return n;
+}
+
+function spanLine(a) {
+  const li = el("li");
+  li.append(el("span", `badge ${a.kind === "off" ? "warn" : "ok"}`, KIND_TEXT[a.kind]), el("span", "when", spanText(a)));
+  if (a.note) li.append(el("span", "muted", `· ${a.note}`));
+  return li;
+}
+
+function renderAvailability() {
+  const hasModel = state.config.model;
+  $("#avail-text").disabled = !hasModel;
+  $("#avail-say-btn").disabled = !hasModel;
+  $("#avail-text").placeholder = hasModel ? "I can't work tomorrow after 5, I have soccer" : "Needs META_API_KEY in .env. Use the form below.";
+  if (!hasModel && !availNoticed) {
+    availNoticed = true;
+    $("#avail-manual").open = true;
+  }
+  const key = JSON.stringify(state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note]));
+  if (key === renderedKeys.avail) return;
+  renderedKeys.avail = key;
+  $("#avail-list").replaceChildren(
+    ...state.availability.map((a) => {
+      const li = spanLine(a);
+      li.append(button("Remove", "ghost small", () => removeSpan(a.id)));
+      return li;
+    }),
+  );
+}
+let availNoticed = false; // the form opens itself once when there's no model key, then stays as the student leaves it
+
+// What a change did, for the toast: where the blocks went, anything left in the way, anything now late.
+function changeText(r, removed) {
+  const parts = [];
+  if (r.moved.length) {
+    const named = r.moved.slice(0, 3).map((m) => `${m.name} to ${fmtDayTime(new Date(m.start))}`);
+    const more = r.moved.length > 3 ? ` and ${r.moved.length - 3} more` : "";
+    parts.push(`${removed ? "Moved into the freed time" : "Moved"}: ${named.join(", ")}${more}.`);
+  } else parts.push(removed ? "Removed." : "Saved. Nothing in your week was in the way.");
+  for (const k of r.kept) parts.push(`${k.name} is already under way, so I left it.`);
+  const late = r.moved.filter((m) => m.at_risk).length;
+  if (late) parts.push(`${late} now end${late === 1 ? "s" : ""} after ${late === 1 ? "it's" : "they're"} due.`);
+  return parts.join(" ");
+}
+
+async function applySpans(entries) {
+  try {
+    const r = await post("/api/availability", {
+      entries: entries.map(({ kind, start, end, note }) => ({ kind, start, end, note })),
+    });
+    movedIds = new Set(r.moved.map((m) => m.id));
+    renderedKeys.week = "";
+    toast(changeText(r), 8000);
+    await refresh(true);
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
+}
+
+async function removeSpan(id) {
+  try {
+    const r = await api(`/api/availability/${id}`, { method: "DELETE" });
+    movedIds = new Set(r.moved.map((m) => m.id));
+    renderedKeys.week = "";
+    toast(changeText(r, true), 6000);
+    await refresh(true);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+// What the server read from the text, for a yes before anything moves.
+function showProposal(r) {
+  const box = $("#avail-proposal");
+  box.hidden = false;
+  const notes = r.notes.map((n) => el("p", "muted small", n));
+  if (!r.entries.length) {
+    box.replaceChildren(el("p", null, "I couldn't find a time to change in that."), ...notes);
+    box.append(button("OK", "ghost", () => (box.hidden = true)));
+    return;
+  }
+  const list = el("ul", "avail-list");
+  r.entries.forEach((a) => list.append(spanLine(a)));
+  const row = el("div", "actions");
+  row.append(
+    button("Adjust my week", "primary", async (e) => {
+      e.target.disabled = true;
+      if (await applySpans(r.entries)) {
+        box.hidden = true;
+        $("#avail-text").value = "";
+      } else e.target.disabled = false;
+    }),
+    button("Cancel", "ghost", () => (box.hidden = true)),
+  );
+  box.replaceChildren(el("p", null, "Here's what I understood:"), list, ...notes, row);
+}
+
+$("#avail-say").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = $("#avail-text").value.trim();
+  if (!text) return;
+  const btn = $("#avail-say-btn");
+  btn.disabled = true;
+  btn.textContent = "Reading…";
+  try {
+    showProposal(await post("/api/availability/parse", { text }));
+  } catch (err) {
+    toast(err.message);
+    $("#avail-manual").open = true; // the form works without the model
+  } finally {
+    btn.textContent = "Adjust my week";
+    btn.disabled = !state.config.model;
+  }
+});
+
+$("#avail-manual").addEventListener("toggle", () => {
+  if (!$("#avail-manual").open || $("#avail-start").value) return;
+  const soon = new Date(Math.ceil((now().getTime() + 15 * 60_000) / 900_000) * 900_000);
+  $("#avail-start").value = toLocalInput(soon);
+  $("#avail-end").value = toLocalInput(new Date(soon.getTime() + 3_600_000));
+});
+
+$("#avail-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const start = new Date($("#avail-start").value);
+  const end = new Date($("#avail-end").value);
+  if (!(end > start)) return toast("It has to end after it starts");
+  if (await applySpans([{ kind: $("#avail-kind").value, start: start.toISOString(), end: end.toISOString(), note: $("#avail-note").value.trim() }])) {
+    $("#avail-note").value = "";
+  }
+});
 
 // ---- cards -------------------------------------------------------------------------------------
 

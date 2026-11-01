@@ -20,13 +20,27 @@ from typing import Literal
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from app import browser_files, checkin, colors, db, grader, habits, loop, meta_client, prep, push, scheduler, student_model
+from app import (
+    availability,
+    browser_files,
+    checkin,
+    colors,
+    db,
+    grader,
+    habits,
+    loop,
+    meta_client,
+    prep,
+    push,
+    scheduler,
+    student_model,
+)
 from app.clock import as_local, clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
-from app.models import Block, GradedTest, Ping, TestRow
+from app.models import Availability, Block, GradedTest, Ping, TestRow
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 TICK_SECONDS = 15  # the longest the background loop sleeps between ticks
@@ -173,7 +187,9 @@ def _checkin_view(conn, ctx: "Context", blocks: list[Block], b: Block, now: date
     planned = target.start if target.id != b.id else None  # a miss's new block
     view["choices"] = [
         {"key": c["key"], "start": c["start"].isoformat()}
-        for c in checkin.choices(blocks, target.id, now, a.due_at if a else None, planned=planned)
+        for c in checkin.choices(
+            blocks, target.id, now, a.due_at if a else None, planned=planned, avail=db.list_availability(conn, now)
+        )
     ]
     if b.status == "pinged":  # "You usually start 25 min late on Tuesdays." when that day has a pattern
         view["habit"] = habits.line(habits.starts(db.list_pings(conn), blocks), as_local(b.start).weekday())
@@ -243,6 +259,7 @@ def state(conn=Depends(get_conn)) -> dict:
         "checkin": [_checkin_view(conn, ctx, blocks, b, now) for b in pending],
         "next_start": ctx.block(next_start) if next_start else None,
         "done_assignments": sorted(_done_assignments(blocks)),
+        "availability": [a.model_dump(mode="json") for a in db.list_availability(conn, now)],
         "sync": _sync_state(conn),
         "config": {
             "canvas": loop.canvas_configured(),
@@ -373,7 +390,8 @@ def _plan_answer(conn, block_id: int, answer: str, picked_time: datetime | None)
     pings = (db.latest_ping(conn, target.id), db.latest_ping(conn, block_id))
     ping = next((p for p in pings if p and p.answer == "none"), None)
     try:
-        new_blocks, record = checkin.apply_answer(blocks, target.id, answer, now, picked_time, ping, due)
+        avail = db.list_availability(conn, now)
+        new_blocks, record = checkin.apply_answer(blocks, target.id, answer, now, picked_time, ping, due, avail=avail)
     except ValueError as e:
         raise HTTPException(400, str(e))
     record = record if ping else record.model_copy(update={"block_id": block_id})
@@ -494,6 +512,85 @@ def assignment_undone(assignment_id: int, conn=Depends(get_conn)) -> dict:
         db.delete_block(conn, block_id)
     new = loop.replan(conn, now)
     return {"restored": [b.id for b in changed], "new_blocks": [b.model_dump(mode="json") for b in new]}
+
+
+# ---- when the student can and can't work ------------------------------------------------------------
+
+
+class AvailabilityIn(BaseModel):
+    kind: Literal["off", "open"]
+    start: datetime
+    end: datetime
+    note: str = Field("", max_length=80)
+
+
+class AvailabilityBatch(BaseModel):
+    entries: list[AvailabilityIn] = Field(min_length=1, max_length=availability.MAX_SPANS)
+
+
+class SayIn(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+def _change_view(conn, change: availability.Change) -> dict:
+    """What a change to the student's spans did: the spans, each block that moved (with where it
+    was), and the live blocks that still sit in time they said they can't work."""
+    ctx = Context(conn)
+    return {
+        "entries": [a.model_dump(mode="json") for a in change.entries],
+        "moved": [
+            {**ctx.block(after), "was": {"start": before.start.isoformat(), "end": before.end.isoformat()}}
+            for before, after in change.moved
+        ],
+        "kept": [ctx.block(b) for b in change.kept],
+    }
+
+
+@app.get("/api/availability")
+def get_availability(conn=Depends(get_conn)) -> dict:
+    """The spans that haven't ended yet."""
+    return {"entries": [a.model_dump(mode="json") for a in db.list_availability(conn, clock.now())]}
+
+
+@app.post("/api/availability")
+def add_availability(body: AvailabilityBatch, conn=Depends(get_conn)) -> dict:
+    """Save what the student can't or can do, and move the planned blocks around it right away
+    (before a ping is missed). Reports the blocks that moved and any live block left in the way."""
+    now = clock.now()
+    spans = []
+    for e in body.entries:
+        start, end = as_local(e.start), as_local(e.end)
+        if end <= start:
+            raise HTTPException(400, "That ends before it starts")
+        if end <= now:
+            raise HTTPException(400, "That time is already over")
+        spans.append(Availability(kind=e.kind, start=start, end=end, note=e.note.strip()))
+    change = availability.apply(conn, spans, now)
+    wake_loop()  # a block's start may now be sooner (or later) than the loop planned for
+    return _change_view(conn, change)
+
+
+@app.delete("/api/availability/{availability_id}")
+def delete_availability(availability_id: int, conn=Depends(get_conn)) -> dict:
+    """Take a span back. Blocks that moved out of it stay put; ones running out of time get another try."""
+    change = availability.remove(conn, availability_id, clock.now())
+    if change is None:
+        raise HTTPException(404, "No such span")
+    wake_loop()
+    return _change_view(conn, change)
+
+
+@app.post("/api/availability/parse")
+def parse_availability(body: SayIn) -> dict:
+    """Read what the student wrote ("I can't work Tuesday after 5, soccer") into spans, without
+    saving them: the page shows them for a yes first, then posts them to /api/availability."""
+    if not meta_client.configured():
+        raise HTTPException(503, "Set META_API_KEY in .env to read this, or use the form")
+    try:
+        spans, notes = availability.parse(body.text, clock.now())
+    except MetaError as e:
+        raise HTTPException(502, str(e))
+    return {"entries": [a.model_dump(mode="json") for a in spans], "notes": notes}
 
 
 class NotesIn(BaseModel):

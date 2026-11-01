@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
-from app.models import Assignment, Block, Course, GradedTest, Ping, PrepCard, TestRow
+from app.models import Assignment, Availability, Block, Course, GradedTest, Ping, PrepCard, TestRow
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS courses (
@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS pings (
     answer TEXT NOT NULL DEFAULT 'none',
     picked_time TEXT,
     started_at TEXT
+);
+CREATE TABLE IF NOT EXISTS availability (  -- availability.py: what the student said they can / can't do
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,           -- 'off' (can't work) or 'open' (can work, even outside the usual hours)
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS test_rows (   -- filled by grader.py: one row per graded question
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +202,39 @@ def get_block(conn: sqlite3.Connection, block_id: int) -> Block | None:
 
 def delete_block(conn: sqlite3.Connection, block_id: int) -> None:
     conn.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+    conn.commit()
+
+
+# ---- availability -----------------------------------------------------------------------------
+
+
+def save_availability(conn: sqlite3.Connection, a: Availability) -> int:
+    """Insert a span (no id) or update it; returns the id."""
+    values = (a.kind, a.start.isoformat(), a.end.isoformat(), a.note)
+    if a.id is None:
+        cur = conn.execute("INSERT INTO availability (kind, start, end, note) VALUES (?, ?, ?, ?)", values)
+        conn.commit()
+        return int(cur.lastrowid)
+    conn.execute("UPDATE availability SET kind=?, start=?, end=?, note=? WHERE id=?", (*values, a.id))
+    conn.commit()
+    return a.id
+
+
+def list_availability(conn: sqlite3.Connection, since: datetime | None = None) -> list[Availability]:
+    """Spans in time order; with `since`, only those that haven't ended by then. (Filtered here, not in
+    SQL: the stored times carry different UTC offsets across a clock change, so they don't sort as text.)"""
+    rows = conn.execute("SELECT * FROM availability").fetchall()
+    spans = [Availability.model_validate(dict(r)) for r in rows]
+    return sorted((a for a in spans if since is None or a.end > since), key=lambda a: a.start)
+
+
+def get_availability(conn: sqlite3.Connection, availability_id: int) -> Availability | None:
+    row = conn.execute("SELECT * FROM availability WHERE id = ?", (availability_id,)).fetchone()
+    return Availability.model_validate(dict(row)) if row else None
+
+
+def delete_availability(conn: sqlite3.Connection, availability_id: int) -> None:
+    conn.execute("DELETE FROM availability WHERE id = ?", (availability_id,))
     conn.commit()
 
 

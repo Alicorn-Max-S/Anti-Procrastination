@@ -14,6 +14,7 @@ ASSIGNMENT_KINDS: tuple[str, ...] = AssignmentKind.__args__
 Effort = Literal["light", "medium", "heavy"]
 BlockStatus = Literal["planned", "pinged", "started", "missed", "done"]
 CheckinAnswer = Literal["start_now", "plus_15", "pick_time", "keep", "none"]  # keep: OK the new time after a miss
+AvailabilityKind = Literal["off", "open"]
 
 
 # ---- Canvas data -----------------------------------------------------------------------------
@@ -148,6 +149,17 @@ class Block(BaseModel):
     end: datetime
     status: BlockStatus = "planned"
     at_risk: bool = False  # True when the block ends after the assignment is due
+
+
+class Availability(BaseModel):
+    """Something the student said about when they can work. "off": they can't, so nothing is planned
+    in the span and planned blocks leave it. "open": they can, even outside the usual daily window."""
+
+    id: int | None = None
+    kind: AvailabilityKind
+    start: datetime
+    end: datetime
+    note: str = ""  # their reason in their own words ("soccer"), shown next to the span
 
 
 class Ping(BaseModel):

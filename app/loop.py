@@ -49,14 +49,15 @@ def replan(conn: sqlite3.Connection, now: datetime) -> list[Block]:
     sessions). Returns the new, saved blocks.
 
     A missed block is history, so an assignment whose block was missed gets a new one right away;
-    the check-in then asks the student to keep that time or pick another.
+    the check-in then asks the student to keep that time or pick another. New blocks keep out of
+    time the student said they can't work and may use time they said they can.
     """
     horizon = now + timedelta(days=settings.card_horizon_days)
     assignments = [a for a in db.list_assignments(conn) if a.due_at and a.due_at <= horizon]
     cards = db.list_cards(conn)
     _drop_long_blocks(conn, assignments, cards)
     existing = [b for b in db.list_blocks(conn) if b.status != "missed"]
-    new = scheduler.plan_blocks(assignments, cards, now, existing)
+    new = scheduler.plan_blocks(assignments, cards, now, existing, avail=db.list_availability(conn, now))
     for b in new:
         b.id = db.save_block(conn, b)
     return new
@@ -131,7 +132,8 @@ def buttons(conn: sqlite3.Connection, asked: Block, target: Block, now: datetime
     a = db.get_assignment(conn, asked.assignment_id)
     out = [{"action": "start_now", "title": "Start now", "answer": "start_now"}]
     planned = target.start if target.id != asked.id else None
-    for c in checkin.choices(db.list_blocks(conn), target.id, now, a.due_at if a else None, planned=planned):
+    avail = db.list_availability(conn, now)
+    for c in checkin.choices(db.list_blocks(conn), target.id, now, a.due_at if a else None, planned=planned, avail=avail):
         if c["key"] == "in_15":
             out.append({"action": "in_15", "title": f"In 15 min · {when(c['start'])}", "answer": "plus_15"})
         else:

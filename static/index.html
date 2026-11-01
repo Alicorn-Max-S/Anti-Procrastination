@@ -74,8 +74,32 @@
       </section>
 
       <section id="tab-week" class="tab-panel" hidden>
+        <div class="panel avail">
+          <h3>When can you work?</h3>
+          <p class="muted small">Say when you can't (or can) work and the week moves around it now, before a start is missed. "I can't work Tuesday after 5, soccer." "I'm free Saturday morning."</p>
+          <form id="avail-say" class="row wrap">
+            <input id="avail-text" type="text" maxlength="500" autocomplete="off" placeholder="I can't work tomorrow after 5, I have soccer" aria-label="When you can or can't work" required />
+            <button id="avail-say-btn" type="submit" class="primary">Adjust my week</button>
+          </form>
+          <div id="avail-proposal" class="avail-proposal" aria-live="polite" hidden></div>
+          <details id="avail-manual" class="avail-manual">
+            <summary>Or set a time by hand</summary>
+            <form id="avail-form" class="row wrap">
+              <select id="avail-kind" aria-label="Can or can't work">
+                <option value="off">I can't work</option>
+                <option value="open">I can work</option>
+              </select>
+              <input id="avail-start" type="datetime-local" aria-label="From" required />
+              <span class="muted small">to</span>
+              <input id="avail-end" type="datetime-local" aria-label="Until" required />
+              <input id="avail-note" type="text" maxlength="80" autocomplete="off" placeholder="Why (optional)" aria-label="Why" />
+              <button type="submit">Add</button>
+            </form>
+          </details>
+          <ul id="avail-list" class="avail-list"></ul>
+        </div>
         <div id="week" class="week"></div>
-        <p class="muted small">Blocks sit between your work hours. When you miss one or pick a new time, the rest of the week moves to make room.</p>
+        <p class="muted small">Blocks sit between your work hours, or in time you said you can work. When you miss one, pick a new time, or say you can't work, the rest of the week moves to make room.</p>
       </section>
 
       <section id="tab-dashboard" class="tab-panel" hidden>

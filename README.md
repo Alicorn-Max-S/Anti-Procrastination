@@ -33,6 +33,7 @@ Assignments linking Google files shared only inside your school? The server can'
 3. **Test cards** (`practice.py`): practice questions aimed at your weakest topic x question-type cells, each answer checked by an independent second solve.
 4. **Graded tests** (`grader.py`): a photo or scan of a marked test goes to the model with **vision**, one call per page, and comes back as sections (subtotals, bonus) and one row per question (answer, marks, X or check, teacher note, topic, type). Code checks the teacher's arithmetic (questions to section subtotals, sections to page totals and the written score) and flags the test for review when it doesn't add up. The course is detected from the test, and question types come from a list kept per course. The Dashboard shows each test's score and sections and the resulting grid (`student_model.py`). `python -m app.grader FILE` reads a file from the command line.
 5. **The start loop** (`scheduler.py`, `loop.py`, `checkin.py`): each card gets a block inside your daily window, worked back from the due date. A test gets short practice sessions instead (three 20-minute ones for a medium test, one on each day before it), and a quick task one 10-minute block. At the block's start you get a ping; 15 minutes without starting marks it missed and asks when you'll start. Picking a time moves that block and shifts only the blocks in its way. Every ping, answer and start is saved in `pings`. The Dashboard's starting stats count them and show how late starts come on each weekday (`habits.py`), and once a weekday has a pattern, its pings say so: "You usually start 25 min late on Tuesdays."
+6. **When you can and can't work** (`availability.py`): on the Week tab, say "I can't work Tuesday after 5, soccer" or "I'm free Saturday morning". Muse Spark reads it into time spans (against a calendar it's given, so "Tuesday" lands on the right date) and the page shows what it understood; nothing changes until you say yes. A form takes a span directly and works without a model key. Saving a span moves the week at once, before any start is missed: each planned block in time you can't work goes to the free working time closest to where it was (earlier the same day if that's nearer, or later), and a block that was running out of time gets another try in time you can work. Blocks you're already on (pinged or started) stay and are reported. New blocks and every check-in time ("In 15 min", "Next work time") keep to the same spans. Removing a span leaves moved blocks where they went. Spans live in the `availability` table.
 
 ## Demo controls
 
@@ -60,6 +61,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/grader.py`, `app/student_model.py` | Graded-test extraction and the weakness grid |
 | `app/scheduler.py`, `app/checkin.py`, `app/clock.py` | Blocks, check-in reflow, simulated clock |
 | `app/habits.py` | How late starts come by weekday, from `pings` |
+| `app/availability.py` | What you say you can and can't do: reads it into spans, and moves the planned blocks around them |
 | `app/push.py` | Web push (VAPID) |
 | `app/db.py`, `app/models.py`, `app/config.py` | SQLite layer, shared types, settings |
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
@@ -67,6 +69,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
 | `decider/` | System One decider: a separate FastAPI process (`python -m decider`, port 8090) that answers the multiple-choice decisions with local Muse Glimmer through llama-server. Not wired into the app yet |
 | `decisions/fields.py` | The decision fields and option order, shared by the labelling page and the decider |
+| `eval/` | System One eval harness (`python -m eval.run calibrate` / `compare`, spec Part C). Per-item records stay in `data/eval/`; only aggregates (`results.csv`, `summary.md`, `compare.png`) land in `eval/`. Needs `pip install -e ".[eval]"` for the chart |
 | `tests/` | Tests, run with `pytest`; they never touch Canvas, the model, push or llama-server |
 
 Real school data (the DB, attachments, test photos) lives under `data/`, which is gitignored. This repo is public.

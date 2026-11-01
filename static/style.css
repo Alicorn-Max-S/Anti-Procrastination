@@ -300,11 +300,36 @@ body.modal-open { overflow: hidden; }
 .block.moved { animation: moved 2.4s ease-out; }
 @keyframes moved { 0% { background: var(--accent); color: var(--accent-ink); } 100% { } }
 
+/* Time the student said they can't (or can) work, on the day it falls in. */
+.avail-strip {
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.avail-strip.off { background: var(--warn-soft); border-left: 3px solid var(--warn); color: var(--warn); }
+.avail-strip.open { background: var(--ok-soft); border-left: 3px solid var(--ok); color: var(--ok); }
+
 @media (max-width: 760px) {
   .week { grid-template-columns: 1fr; }
   .day { min-height: 0; }
-  .day:not(:has(.block)) { display: none; }
+  .day:not(:has(.block, .avail-strip)) { display: none; }
 }
+
+/* ---- when you can and can't work (Week tab) ---- */
+.avail .row input[type="text"] { flex: 1 1 16rem; min-width: 0; }
+.avail-manual { margin-top: 0.7rem; }
+.avail-manual summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.avail-manual form { margin-top: 0.5rem; }
+.avail-list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.4rem; }
+.avail-list:empty { display: none; }
+.avail-list li { display: flex; align-items: center; gap: 0.2rem 0.5rem; flex-wrap: wrap; }
+.avail-list .when { font-variant-numeric: tabular-nums; }
+.avail-proposal { margin-top: 0.7rem; padding: 0.7rem 0.85rem; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); }
+.avail-proposal p { margin: 0 0 0.4rem; }
+.avail-proposal .actions { margin-top: 0.6rem; }
 
 /* ---- dashboard ---- */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem; margin-bottom: 1rem; }

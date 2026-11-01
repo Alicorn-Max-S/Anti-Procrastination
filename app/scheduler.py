@@ -6,13 +6,16 @@ overlap, and they sit inside a daily window (WORK_START_HOUR to WORK_END_HOUR, l
 when nothing fits before the due date does a block go outside the window or get flagged at_risk.
 A test gets several short practice sessions instead, one on each of the days before it, and a
 quick task (a form, a signature) one QUICK_MINUTES block.
+
+What the student said about their time (`Availability`) shapes every search: time they can't work
+joins `busy`, and time they can work (`open_`) counts as working time on top of the daily window.
 """
 
 from datetime import datetime, timedelta
 
 from app.clock import local_tz
 from app.config import settings
-from app.models import Assignment, Block, PrepCard
+from app.models import Assignment, Availability, Block, PrepCard
 
 SLOT = timedelta(minutes=15)
 DURATION_MINUTES = {"light": 30, "medium": 60, "heavy": 90}
@@ -43,6 +46,29 @@ def overlapping(start: datetime, end: datetime, busy: Busy) -> Busy:
     return [(s, e) for s, e in busy if start < e and s < end]
 
 
+def off_times(avail: list[Availability] | None) -> Busy:
+    """The spans the student said they can't work."""
+    return [(a.start, a.end) for a in avail or [] if a.kind == "off"]
+
+
+def open_times(avail: list[Availability] | None) -> Busy:
+    """The spans the student said they can work, whatever the daily window says."""
+    return [(a.start, a.end) for a in avail or [] if a.kind == "open"]
+
+
+def _day_window(t: datetime, window: Window) -> tuple[datetime, datetime]:
+    """The daily work window on the day of `t`."""
+    day_start = t.replace(hour=window[0], minute=0, second=0, microsecond=0)
+    return day_start, day_start + timedelta(hours=window[1] - window[0])
+
+
+def in_work_time(t: datetime, length: timedelta, window: Window, open_: Busy | None = None) -> bool:
+    """Whether `length` from `t` sits inside that day's window or inside one open span."""
+    t = t.astimezone(local_tz())  # a time read back from the DB carries a fixed UTC offset
+    day_start, day_end = _day_window(t, window)
+    return (day_start <= t and t + length <= day_end) or any(s <= t and t + length <= e for s, e in open_ or [])
+
+
 def find_slot(
     start_from: datetime,
     length: timedelta,
@@ -50,30 +76,57 @@ def find_slot(
     deadline: datetime | None = None,
     window: Window | None = None,
     horizon: timedelta = timedelta(days=21),
+    open_: Busy | None = None,
 ) -> datetime | None:
     """Earliest quarter-hour start at or after `start_from` where `length` fits without overlapping
-    `busy`, inside the daily `window` if given, ending by `deadline` if given."""
+    `busy`, inside the daily `window` (or an `open_` span) if a window is given, ending by
+    `deadline` if given."""
     tz = local_tz()
     t = ceil_slot(start_from.astimezone(tz))
     limit = t + horizon
     while t < limit:
         if deadline is not None and t + length > deadline:
             return None
-        if window is not None:
-            day_start = t.replace(hour=window[0], minute=0, second=0, microsecond=0)
-            day_end = day_start + timedelta(hours=window[1] - window[0])
-            if t < day_start:
-                t = day_start
-                continue
-            if t + length > day_end:
-                t = day_start + timedelta(days=1)
-                continue
+        if window is not None and not in_work_time(t, length, window, open_):
+            day_start, _ = _day_window(t, window)
+            # the next time working time can start: this day's window, tomorrow's, or an open span
+            opens = [day_start if t < day_start else day_start + timedelta(days=1)]
+            t = ceil_slot(min(opens + [s for s, _ in open_ or [] if s > t]).astimezone(tz))
+            continue
         clash = overlapping(t, t + length, busy)
         if clash:
             t = ceil_slot(max(e for _, e in clash).astimezone(tz))
             continue
         return t
     return None
+
+
+def nearest_slot(
+    near: datetime,
+    length: timedelta,
+    busy: Busy,
+    earliest: datetime,
+    deadline: datetime | None = None,
+    window: Window | None = None,
+    open_: Busy | None = None,
+) -> datetime | None:
+    """The free slot closest in time to `near`, none starting before `earliest`: the first at or
+    after `near` or the last before it, whichever is nearer (a tie goes to the earlier one). The
+    reflow after a check-in only moves things later; this is for a change in what the student
+    can do, where an earlier slot the same day beats one on a later day."""
+    tz = local_tz()
+    after = find_slot(max(near, earliest), length, busy, deadline, window, open_=open_)
+    before = None
+    t = ceil_slot(near.astimezone(tz)) - SLOT
+    while before is None and t >= earliest and near - t <= timedelta(days=21):
+        in_time = deadline is None or t + length <= deadline
+        in_hours = window is None or in_work_time(t, length, window, open_)
+        if in_time and in_hours and not overlapping(t, t + length, busy):
+            before = t
+        t -= SLOT
+    if after is None or before is None:
+        return after or before
+    return before if near - before <= after - near else after
 
 
 def _is_live(b: Block, now: datetime) -> bool:
@@ -100,7 +153,13 @@ def block_minutes(a: Assignment, card: PrepCard | None) -> int:
 
 
 def _practice(
-    a: Assignment, effort: str, mine: list[Block], busy: Busy, earliest: datetime, window: Window
+    a: Assignment,
+    effort: str,
+    mine: list[Block],
+    busy: Busy,
+    earliest: datetime,
+    window: Window,
+    open_: Busy | None = None,
 ) -> list[Block]:
     """The practice sessions a test still needs: PRACTICE_SESSIONS[effort] minus the live ones in
     `mine`. A fresh plan puts one on each of the days before the test, the last on the day before
@@ -117,8 +176,8 @@ def _practice(
     spaced = [(b.start - PRACTICE_GAP, b.end + PRACTICE_GAP) for b in mine]
     out: list[Block] = []
     for day in days:
-        start = find_slot(max(earliest, day), length, busy + spaced, a.due_at, window) or find_slot(
-            earliest, length, busy + spaced, a.due_at, window
+        start = find_slot(max(earliest, day), length, busy + spaced, a.due_at, window, open_=open_) or find_slot(
+            earliest, length, busy + spaced, a.due_at, window, open_=open_
         )
         at_risk = False
         if start is None:
@@ -140,14 +199,18 @@ def plan_blocks(
     now: datetime,
     existing: list[Block] | None = None,
     window: Window | None = None,
+    avail: list[Availability] | None = None,
 ) -> list[Block]:
     """Propose planned Blocks for every unfinished assignment due after `now` that isn't marked
     done: one work block, or for a test its practice sessions (see `_practice`). An assignment
     with live blocks gets nothing more, except a test short of sessions (a missed one's
-    replacement). Returns only the new blocks (without ids)."""
+    replacement). `avail` is what the student said they can and can't do: nothing is planned in
+    time they can't work, and time they can work counts beside the daily window. Returns only
+    the new blocks (without ids)."""
     window = window or default_window()
     by_card = {c.assignment_id: c for c in cards}
-    busy: Busy = []
+    open_ = open_times(avail)
+    busy: Busy = off_times(avail)
     live: dict[int, list[Block]] = {}
     done: set[int] = set()
     for b in existing or []:
@@ -168,7 +231,7 @@ def plan_blocks(
         card = by_card.get(a.id)
         e = card.effort if card else "medium"
         if is_test(a, card):
-            new += _practice(a, e, live.get(a.id, []), busy, earliest, window)
+            new += _practice(a, e, live.get(a.id, []), busy, earliest, window, open_)
             continue
         if a.id in live:
             continue
@@ -177,8 +240,8 @@ def plan_blocks(
             hour=0, minute=0, second=0, microsecond=0
         )
         start = (
-            find_slot(max(earliest, lead_day), length, busy, a.due_at, window)
-            or find_slot(earliest, length, busy, a.due_at, window)
+            find_slot(max(earliest, lead_day), length, busy, a.due_at, window, open_=open_)
+            or find_slot(earliest, length, busy, a.due_at, window, open_=open_)
             or find_slot(earliest, length, busy, a.due_at, None)  # outside the window, still in time
         )
         at_risk = start is None
