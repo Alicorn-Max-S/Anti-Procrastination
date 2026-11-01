@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+eval = ["matplotlib>=3.8"]  # eval/compare.png (python -m eval.run compare)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

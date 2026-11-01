@@ -1,0 +1,29 @@
+{
+  "lines": {
+    "type": {
+      "fast": 0.999762,
+      "think": 1.01
+    },
+    "template": {
+      "fast": 0.99941,
+      "think": 1.01
+    },
+    "effort": {
+      "fast": 0.98,
+      "think": 1.01
+    },
+    "format": {
+      "fast": 0.996,
+      "think": 1.01
+    },
+    "topic": {
+      "fast": 0.91,
+      "think": 1.01
+    },
+    "credit": {
+      "fast": 0.89,
+      "think": 1.01
+    }
+  },
+  "skip_thinking": []
+}

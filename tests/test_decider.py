@@ -72,7 +72,8 @@ class Req:
         self.text = detok(self.ids)
         block = self.text[self.text.rindex("Question: "):]
         self.question = block.split("\n", 1)[0].removeprefix("Question: ")
-        self.options = dict(re.findall(r"^([A-Z])\) (.+)$", block, re.M))  # letter -> label
+        # letter -> label: an option line is "A) Label: its definition"
+        self.options = dict(re.findall(r"^([A-Z])\) ([^:\n]+)", block, re.M))
         self.think_n = self._thinking()
 
     def _thinking(self) -> int:
@@ -380,10 +381,22 @@ def test_probe_tokens_after_first_are_only_the_tail(s):
     probes = [(r, t) for k, r, t in fake.requests if k == "probe"]
     assert len(probes) == 9 and probes[0][1]["prompt_n"] == len(probes[0][0].ids)
     for r, t in probes[1:]:  # never the system turn or the assignment again
-        tail = len(tok(r.text[r.text.rindex("Question: "):]))
+        start = r.text.find("Assignment type: ")  # template and effort: the type answer is new too
+        tail = len(tok(r.text[start if start >= 0 else r.text.rindex("Question: "):]))
         assert 0 < t["prompt_n"] <= tail
-    assert out["decisions"]["type"]["probe_tokens"] == sum(t["prompt_n"] for _, t in probes[:2]) + \
-        probes[6][1]["prompt_n"]  # type's forward and reversed probes, then its final probe
+    # type's forward and reversed probes, then its final probe, before template and effort start
+    assert out["decisions"]["type"]["probe_tokens"] == sum(t["prompt_n"] for _, t in probes[:3])
+
+
+def test_template_and_effort_see_the_type_answer(s):
+    fake = FakeLlama(probe=by_question({
+        "What type": sure("Lab report"), "Which prep": sure("Dashboard"), "How much effort": sure("One solid session"),
+    }))
+    out = decider(fake, s).decide_assignment(ASSIGNMENT, ["effort"])
+    asked = [(r.question, "Assignment type: Lab report" in r.text) for k, r, _ in fake.requests if k == "probe"]
+    assert asked[0] == ("What type of assignment is this?", False)  # type first, even when not asked for
+    assert all(seen for q, seen in asked if q.startswith("How much effort"))
+    assert list(out["decisions"]) == ["effort"]
 
 
 def test_lines_file_and_skip_thinking(s, tmp_path):
@@ -402,7 +415,8 @@ def test_lines_file_and_skip_thinking(s, tmp_path):
 
 def test_template_question_has_hint_and_reply_line():
     block = choice_for(TEMPLATE).block()
-    assert "Usual template by assignment type: Test or quiz: Dashboard;" in block
+    assert "Usual template by assignment type:\n- Test or quiz: Dashboard\n" in block
+    assert "- Something else:" not in block  # its templates split, so it gets no line
     assert block.splitlines()[-1] == "Reply with just the letter."
     assert "A) Document" in block and "E) Quick task" in block
 
@@ -500,18 +514,18 @@ def test_parallel_loops_each_get_their_own_slot(s):
     import threading
     import time
 
-    gate = threading.Barrier(3, timeout=5)  # all three loops must be thinking at once
+    gate = threading.Barrier(2, timeout=5)  # template's and effort's loops must think at once
 
     def slow_think(r: Req):
-        if r.think_n == 0:
-            gate.wait()
+        if r.think_n == 0 and r.question != "What type of assignment is this?":
+            gate.wait()  # type thinks alone first: the other two need its answer
         time.sleep(0.01)
         return words(30) + [EOM], "eos"
 
     fake = FakeLlama(probe=lambda r: sure(r.options["A"]), think=slow_think)  # flips: all think
     out = decider(fake, replace(s, parallel_slots=3)).decide_assignment(ASSIGNMENT)
     first_chunks = [r for r in fake.kinds("think") if r.think_n == 0]
-    assert sorted(r.body["id_slot"] for r in first_chunks) == [0, 1, 2]
+    assert sorted(r.body["id_slot"] for r in first_chunks[1:]) == [0, 1]
     assert all(d["tier"] == "thought" for d in out["decisions"].values())
 
 

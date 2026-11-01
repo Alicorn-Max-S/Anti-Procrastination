@@ -179,7 +179,7 @@ function leftQuestion(q) {
 function fieldHtml(item, f) {
   const opts = optionsOf(item, f), cur = labelsOf(item)[f.key];
   const buttons = opts.map((o, i) =>
-    `<button class="opt${cur === o.value ? ' sel' : ''}" data-field="${f.key}" data-value="${esc(o.value)}">
+    `<button class="opt${cur === o.value ? ' sel' : ''}" data-field="${f.key}" data-value="${esc(o.value)}"${o.description ? ` title="${esc(o.description)}"` : ''}>
        ${i < 9 ? `<kbd>${i + 1}</kbd>` : ''}${esc(o.label)}</button>`).join('');
   const none = f.per_class
     ? `<button class="opt" data-field="${f.key}" data-nonefit="1"><kbd>0</kbd>None of these fit</button>` : '';

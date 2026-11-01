@@ -294,7 +294,8 @@ def get_items() -> dict:
             "fields": {
                 kind: [
                     {"key": f.key, "question": f.question, "per_class": f.per_class,
-                     "options": [{"value": o.value, "label": o.label} for o in f.options]}
+                     "options": [{"value": o.value, "label": o.label, "description": o.description}
+                                 for o in f.options]}
                     for f in fields
                 ]
                 for kind, fields in FIELDS_BY_KIND.items()

@@ -1,5 +1,6 @@
 """Deciding whole items: the fast pass for every field first, then the thinking loops for the fields
 that came out unsure. Loops run in parallel, one llama-server slot each, only when PARALLEL_SLOTS > 1.
+An assignment goes in two stages: type, then template and effort with the type answer in the prompt.
 
 The tiers: `instant` when the forward and reversed fast-pass probes agree and clear the fast line;
 `thought` when a thinking probe clears the think line; `guessed` for the top option otherwise (a
@@ -22,6 +23,7 @@ from .llama import Llama
 from .probe import Probe
 from .prompts import (
     MAX_TOPICS,
+    USES_TYPE,
     Choice,
     Prompt,
     TopicListFull,
@@ -29,6 +31,7 @@ from .prompts import (
     choice_for,
     none_fit_index,
     test_context,
+    with_type,
 )
 from .think import Thought, think
 from .topics import name_topic, resolve
@@ -152,25 +155,35 @@ class Decider:
 
     def decide_assignment(self, assignment: dict, fields: list[str] | None = None,
                           seed: int | None = None) -> dict:
+        """Type first, then template and effort with the type answer in their prompt (USES_TYPE).
+        Type is decided even when only a later field is asked for."""
         wanted = pick_fields(ASSIGNMENT_FIELDS, fields)
+        later = [f for f in wanted if f.key in USES_TYPE]
+        first = [f for f in ASSIGNMENT_FIELDS
+                 if f.key not in USES_TYPE and (f in wanted or (bool(later) and f.key == "type"))]
         with self._lock:
             start, before = time.perf_counter(), Counter(self.llama.counts)
             lines = load_lines(self.s.lines_file)
             context = assignment_context(assignment)
             decisions: dict[str, dict] = {}
-            pending = []
-            for f in wanted:
-                job = Job("", f, context, choice_for(f))
-                d = self._settle(job, lines)
-                if d is None:
-                    pending.append(job)
-                else:
-                    decisions[f.key] = d
 
             def run(job: Job, slot: int) -> None:
                 decisions[job.field.key] = self._think(job, lines, slot, seed)
 
-            self._loops(pending, run)
+            def stage(group: list[Field], ctx: str) -> None:
+                pending = []
+                for f in group:
+                    job = Job("", f, ctx, choice_for(f))
+                    d = self._settle(job, lines)
+                    if d is None:
+                        pending.append(job)
+                    else:
+                        decisions[f.key] = d
+                self._loops(pending, run)
+
+            stage(first, context)
+            if later:
+                stage(later, with_type(context, decisions["type"]["value"]))
             return {
                 "decisions": {f.key: decisions[f.key] for f in wanted},
                 "timings": self._timings(start, before),

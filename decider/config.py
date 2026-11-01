@@ -26,7 +26,7 @@ class Settings:
     min_probe_chunk: int = int(os.getenv("MIN_PROBE_CHUNK", "24"))
     letter_share_min: float = float(os.getenv("LETTER_SHARE_MIN", "0.5"))
     lines_file: str = os.getenv("LINES_FILE", "decisions/lines.json")
-    prompt_version: str = os.getenv("PROMPT_VERSION", "1")
+    prompt_version: str = os.getenv("PROMPT_VERSION", "7")  # 2: option definitions; 3: examples; 4: video or audio; 5: Nov 1 rules; 6: v2 credit wording back; 7: type before template and effort, more Nov 1 rules
     # How the fast pass ends the prompt: an empty thinking message, or straight to the answer.
     # glimmer_check.py check 3 picks it (empty thinking put 0.998 on the letters, none 0.880).
     fast_pass_format: str = os.getenv("FAST_PASS_FORMAT", "empty-thinking")
