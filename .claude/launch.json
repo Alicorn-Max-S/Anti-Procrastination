@@ -8,6 +8,30 @@
       "port": 8000
     },
     {
+      "name": "app-8001",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--reload", "--port", "8001"],
+      "port": 8001
+    },
+    {
+      "name": "decider",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["-m", "decider"],
+      "port": 8090
+    },
+    {
+      "name": "labeling",
+      "runtimeExecutable": ".venv/Scripts/python",
+      "runtimeArgs": ["-m", "labeling"],
+      "port": 8100
+    },
+    {
+      "name": "glimmer",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-File", "C:\\Users\\Max\\llama.cpp\\start-glimmer.ps1"],
+      "port": 8080
+    },
+    {
       "name": "demo",
       "runtimeExecutable": ".venv/Scripts/python",
       "runtimeArgs": [
@@ -24,6 +48,15 @@
         "import os; os.environ.update(DB_PATH='data/cards.db', BACKGROUND='false'); import uvicorn; uvicorn.run('app.main:app', port=8003)"
       ],
       "port": 8003
+    },
+    {
+      "name": "test-8010",
+      "runtimeExecutable": "../Anti-Procrastination-feedback/.venv/Scripts/python",
+      "runtimeArgs": [
+        "-c",
+        "import os, sys; os.chdir(r'C:\\Users\\Max\\Documents\\Coding Project\\Anti-Procrastination-test'); sys.path.insert(0, os.getcwd()); import uvicorn; uvicorn.run('app.main:app', port=8010)"
+      ],
+      "port": 8010
     }
   ]
 }
