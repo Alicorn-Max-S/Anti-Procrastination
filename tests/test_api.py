@@ -36,7 +36,7 @@ def test_cards_and_state(client):
     quiz = next(c for c in cards if c["kind"] == "test")
     assert quiz["practice"] and quiz["next_block"]
     state = client.get("/api/state").json()
-    assert state["simulated"] and len(state["blocks"]) == 5 and state["checkin"] == []
+    assert state["simulated"] and len(state["blocks"]) == 7 and state["checkin"] == []  # the quiz has 3 sessions
 
 
 def test_the_start_loop(client):

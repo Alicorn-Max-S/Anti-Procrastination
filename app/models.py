@@ -125,6 +125,7 @@ class PrepCard(BaseModel):
     links: list[Link] = Field(default_factory=list)
     watch_out: str = ""  # from the student model; empty until there is evidence
     effort: Effort = "medium"
+    quick: bool = False  # one small action with nothing to prep (a form, a signature): no steps, a 10-minute block
     practice: list[PracticeQuestion] = Field(default_factory=list)  # test cards only
     focus: str = ""  # test cards: which weak spots the practice set targets
     generated_by: Literal["model", "fallback", "demo"] = "model"

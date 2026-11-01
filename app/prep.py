@@ -102,6 +102,11 @@ The point is to make starting effortless, not to do the work.
   all of your steps" for every calculation.' Never generic advice. If there is none, "". Quote
   exactly; never invent or reword anything inside quotes.
 - effort: light (under 45 minutes), medium, or heavy (over 2 hours or more than one sitting).
+- quick: true only when the whole assignment is one small action of about 10 minutes with nothing
+  to prepare, read, write or solve: filling in a form or survey, signing or acknowledging
+  something, turning in work that is already finished. Then first_step is that action, naming the
+  form or page; steps is []; effort is light. Quizzes, tests, exit tickets, checks for
+  understanding, readings and anything with questions to answer are never quick. Otherwise false.
 - Answer keys (listed in the prompt) are only for checking finished work. A step may say to check
   against the key by name; never put its answers, values or worked steps anywhere on the card.
 Never write any part of the answer or solve problems for the student."""
@@ -118,6 +123,7 @@ class CardDraft(BaseModel):
     watch_out: str
     effort: Effort
     reading_notes: list[str] = Field(default_factory=list)  # one per reading sitting
+    quick: bool = False
 
 
 # ---- per-course notes setting -----------------------------------------------------------------
@@ -559,7 +565,10 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     )
     kind = decide_kind(assignment, draft.kind)
     steps, effort = draft.steps[:7], draft.effort
-    if kind == "reading" and plan:
+    quick = draft.quick and kind != "test"  # a test always gets its practice
+    if quick:
+        steps, effort, plan = [], "light", None
+    elif kind == "reading" and plan:
         notes = [_NOTE_PREFIX.sub("", n) for n in draft.reading_notes]
         notes = [n[:1].upper() + n[1:] for n in notes] + [""] * len(plan.sittings)
         extra = [s for s in draft.steps if not _READ_PAGES.match(s)][:3]  # the plan already has these
@@ -585,6 +594,7 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
         links=kept or links,
         watch_out=_watch_out(conn, assignment, kind, draft.watch_out, text, [d.text for d in docs if d.readable]),
         effort=effort,
+        quick=quick,
         generated_by="model",
         sources=sources,
         instructions_seen=bool(text.strip() or files),

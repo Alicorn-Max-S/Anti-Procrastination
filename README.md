@@ -20,6 +20,7 @@ No Canvas token or model key yet? Load made-up sample data and everything else w
 
 ```
 python -m app.demo            # four fake courses, graded history, cards, graded-test rows
+python -m app.demo --usage    # the same, plus three made-up weeks of pings and starts
 python -m app.demo --clear    # remove it again
 ```
 
@@ -28,10 +29,10 @@ Assignments linking Google files shared only inside your school? The server can'
 ## How it works
 
 1. **Sync** (`sync.py`, `canvas.py`): courses, assignments, rubric criteria, and, for graded work, teacher comments and rubric scores.
-2. **Prep cards** (`prep.py`): for each assignment due in the next `CARD_HORIZON_DAYS`, Muse Spark gets the description, rubric, links and attachments (DOCX/PPTX converted to PDF if LibreOffice is installed) and returns a card through **structured output**. It can call two **tools**, `past_feedback` and `weak_spots`, to ground the "watch out" line in what your teachers actually said. Links it returns are kept only if they really came from Canvas.
+2. **Prep cards** (`prep.py`): for each assignment due in the next `CARD_HORIZON_DAYS`, Muse Spark gets the description, rubric, links and attachments (DOCX/PPTX converted to PDF if LibreOffice is installed) and returns a card through **structured output**. It can call two **tools**, `past_feedback` and `weak_spots`, to ground the "watch out" line in what your teachers actually said. Links it returns are kept only if they really came from Canvas. Each card opens as a prep doc in one of four templates (Document, Checklist, Dashboard, Cornell), in the course's color, with a Focus mode that shows one step at a time (`static/prepdoc.js`). When the whole task is one small action with nothing to prep (a form, a signature), the model marks it quick, and the card is just that action and a link.
 3. **Test cards** (`practice.py`): practice questions aimed at your weakest topic x question-type cells, each answer checked by an independent second solve.
 4. **Graded tests** (`grader.py`): a photo or scan of a marked test goes to the model with **vision**, one call per page, and comes back as sections (subtotals, bonus) and one row per question (answer, marks, X or check, teacher note, topic, type). Code checks the teacher's arithmetic (questions to section subtotals, sections to page totals and the written score) and flags the test for review when it doesn't add up. The course is detected from the test, and question types come from a list kept per course. The Dashboard shows each test's score and sections and the resulting grid (`student_model.py`). `python -m app.grader FILE` reads a file from the command line.
-5. **The start loop** (`scheduler.py`, `loop.py`, `checkin.py`): each card gets a block inside your daily window, worked back from the due date. At the block's start you get a ping; 15 minutes without starting marks it missed and asks when you'll start. Picking a time moves that block and shifts only the blocks in its way. Every ping, answer and start is saved in `pings` (the Dashboard's starting stats).
+5. **The start loop** (`scheduler.py`, `loop.py`, `checkin.py`): each card gets a block inside your daily window, worked back from the due date. A test gets short practice sessions instead (three 20-minute ones for a medium test, one on each day before it), and a quick task one 10-minute block. At the block's start you get a ping; 15 minutes without starting marks it missed and asks when you'll start. Picking a time moves that block and shifts only the blocks in its way. Every ping, answer and start is saved in `pings`. The Dashboard's starting stats count them and show how late starts come on each weekday (`habits.py`), and once a weekday has a pattern, its pings say so: "You usually start 25 min late on Tuesdays."
 
 ## Demo controls
 
@@ -58,10 +59,11 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/prep.py`, `app/practice.py` | Homework prep cards and test practice sets |
 | `app/grader.py`, `app/student_model.py` | Graded-test extraction and the weakness grid |
 | `app/scheduler.py`, `app/checkin.py`, `app/clock.py` | Blocks, check-in reflow, simulated clock |
+| `app/habits.py` | How late starts come by weekday, from `pings` |
 | `app/push.py` | Web push (VAPID) |
 | `app/db.py`, `app/models.py`, `app/config.py` | SQLite layer, shared types, settings |
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
-| `static/` | The single web page, PWA manifest, service worker, icons |
+| `static/` | The single web page (`prepdoc.js` draws the prep docs), PWA manifest, service worker, icons |
 | `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
 | `tests/` | Tests, run with `pytest`; they never touch Canvas, the model or push |
 

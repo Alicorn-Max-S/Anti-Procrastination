@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app import db, demo, loop, main, push
 from app.clock import clock as sim_clock
 from app.main import app
-from app.models import Assignment, Block
+from app.models import Assignment, Block, PrepCard
 from tests.conftest import at
 
 PSET, LAB, QUIZ = 9000203, 9000201, 9000202
@@ -123,9 +123,9 @@ def test_keep_needs_a_new_time(client):
 
 
 def test_a_big_jump_still_asks_and_replans(client):
-    # Monday morning to Wednesday noon: blocks 1-3 were never pinged
+    # Monday morning to Wednesday noon: blocks 1-4 were never pinged (3 and 4 are quiz practice)
     r = set_clock(client, at(4, 12))
-    assert sorted(r["events"]["missed"]) == [1, 2, 3]
+    assert sorted(r["events"]["missed"]) == [1, 2, 3, 4]
     pending = {b["assignment_id"]: b for b in state(client)["checkin"]}
 
     # Problem Set 6 was due Tuesday night: no new block, its card says past due instead of asking
@@ -138,7 +138,10 @@ def test_a_big_jump_still_asks_and_replans(client):
         assert pending[aid]["status"] == "missed"
         assert datetime.fromisoformat(pending[aid]["replacement"]["start"]) > at(4, 12)
         assert card(client, aid)["missed"]["block_id"] == pending[aid]["id"]
-    assert len(r["events"]["new"]) == 2
+    # one for the lab, two for the quiz, whose Wednesday session still stands: three sessions again
+    assert len(r["events"]["new"]) == 3
+    quiz = sorted(b["start"] for b in state(client)["blocks"] if b["assignment_id"] == QUIZ and b["status"] == "planned")
+    assert len(quiz) == 3 and all(b["name"].startswith("Practice for ") for b in state(client)["blocks"] if b["assignment_id"] == QUIZ)
 
 
 def test_a_moved_block_missed_again_asks_again(client):
@@ -220,11 +223,11 @@ def test_answering_clears_the_notification_on_other_devices(client, monkeypatch)
 
 
 def test_checkin_offers_in_15_and_the_next_work_time(client):
-    set_clock(client, at(2, 15, 20))  # block 1 (3 PM) is pinged; block 2 runs 4:00-5:30
+    set_clock(client, at(2, 15, 20))  # block 1 (3 PM) is pinged; block 2 runs 4:00-5:30, quiz practice 5:30-5:50
     [pending] = state(client)["checkin"]
     assert [c["key"] for c in pending["choices"]] == ["in_15", "next"]
     assert close(pending["choices"][0]["start"], at(2, 15, 35))
-    assert datetime.fromisoformat(pending["choices"][1]["start"]) == at(2, 17, 30)  # 3:45 runs into block 2
+    assert datetime.fromisoformat(pending["choices"][1]["start"]) == at(2, 18)  # 3:45 runs into block 2, 5:30 into the practice
 
 
 def test_notifications_carry_the_checkin_buttons(client, monkeypatch):
@@ -233,7 +236,7 @@ def test_notifications_carry_the_checkin_buttons(client, monkeypatch):
     set_clock(client, at(2, 15))  # block 1 (3 PM) pinged
     _, _, extra = sent[-1]
     titles = [a["title"] for a in extra["actions"]]
-    assert titles == ["Start now", "In 15 min · Mon 3:15 PM", "Next work time · Mon 5:30 PM", "Pick a time…"]
+    assert titles == ["Start now", "In 15 min · Mon 3:15 PM", "Next work time · Mon 6:00 PM", "Pick a time…"]
     assert [a.get("answer") for a in extra["actions"]] == ["start_now", "plus_15", "pick_time", None]
     clock(client, action="advance", minutes=20)  # missed at 3:20; a new block is planned at once
     title, body, extra = sent[-1]
@@ -252,7 +255,7 @@ def test_preview_says_what_moves_without_saving(client):
     body = r.json()
     assert datetime.fromisoformat(body["block"]["start"]) == at(2, 16)
     [shifted] = body["moved"]
-    assert shifted["id"] == 2 and datetime.fromisoformat(shifted["start"]) == at(2, 17)
+    assert shifted["id"] == 2 and datetime.fromisoformat(shifted["start"]) == at(2, 18)  # after the 5:30 quiz practice
     assert {b["id"]: b["start"] for b in state(client)["blocks"]} == before  # nothing saved
 
 
@@ -343,3 +346,24 @@ def test_a_clock_change_wakes_the_sleeping_loop(conn):
         return time.monotonic() - began
 
     assert asyncio.run(sleep_then_measure()) < 30  # woken, not timed out; loose so a busy machine passes
+
+
+def test_a_test_planned_as_one_long_block_gets_practice_sessions_instead(conn):
+    quiz = Assignment(id=7, course_id=1, name="Quiz 3", kind="test", due_at=at(6, 9))
+    db.save_assignment(conn, quiz)
+    db.save_card(conn, PrepCard(assignment_id=7, kind="test", summary="", first_step="", steps=[], effort="medium"))
+    old = db.save_block(conn, Block(assignment_id=7, start=at(4, 15), end=at(4, 16)))
+    loop.replan(conn, at(2, 10))
+    blocks = db.list_blocks(conn)
+    assert old not in {b.id for b in blocks}
+    assert [(b.start, b.end - b.start) for b in blocks] == [(at(d, 15), timedelta(minutes=20)) for d in (3, 4, 5)]
+    assert loop._name(conn, 7) == "Practice for Quiz 3"
+
+
+def test_a_quick_task_planned_as_a_long_block_gets_a_ten_minute_one(conn):
+    db.save_assignment(conn, Assignment(id=8, course_id=1, name="Course survey", kind="other", due_at=at(4, 23, 59)))
+    db.save_card(conn, PrepCard(assignment_id=8, kind="other", summary="", first_step="", steps=[], effort="light", quick=True))
+    db.save_block(conn, Block(assignment_id=8, start=at(3, 15), end=at(3, 15, 30)))
+    loop.replan(conn, at(2, 10))
+    [b] = db.list_blocks(conn)
+    assert (b.start, b.end - b.start) == (at(3, 15), timedelta(minutes=10))

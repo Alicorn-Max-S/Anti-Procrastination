@@ -22,8 +22,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import browser_files, checkin, colors, db, grader, loop, meta_client, prep, push, scheduler, student_model
-from app.clock import clock, local_tz
+from app import browser_files, checkin, colors, db, grader, habits, loop, meta_client, prep, push, scheduler, student_model
+from app.clock import as_local, clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
 from app.models import Block, GradedTest, Ping, TestRow
@@ -136,7 +136,7 @@ class Context:
         card = self.cards.get(b.assignment_id)
         return {
             **b.model_dump(mode="json"),
-            "name": a.name if a else f"Assignment {b.assignment_id}",
+            "name": loop.block_name(a, card, b.assignment_id),
             "kind": card.kind if card else a.kind if a else "other",
             "course": self.courses.get(a.course_id, "") if a else "",
             "due_at": a.due_at.isoformat() if a and a.due_at else None,
@@ -175,6 +175,8 @@ def _checkin_view(conn, ctx: "Context", blocks: list[Block], b: Block, now: date
         {"key": c["key"], "start": c["start"].isoformat()}
         for c in checkin.choices(blocks, target.id, now, a.due_at if a else None, planned=planned)
     ]
+    if b.status == "pinged":  # "You usually start 25 min late on Tuesdays." when that day has a pattern
+        view["habit"] = habits.line(habits.starts(db.list_pings(conn), blocks), as_local(b.start).weekday())
     return view
 
 
@@ -454,7 +456,7 @@ def start_assignment(assignment_id: int, conn=Depends(get_conn)) -> dict:
         return _answer(conn, pending[0].id, "start_now")
     now = clock.now()
     card = db.get_card(conn, assignment_id)
-    minutes = scheduler.DURATION_MINUTES[card.effort if card else "medium"]
+    minutes = scheduler.block_minutes(a, card)
     b = Block(assignment_id=assignment_id, start=now, end=now + timedelta(minutes=minutes), status="started")
     b.id = db.save_block(conn, b)
     db.save_ping(conn, Ping(block_id=b.id, sent_at=now, answer="start_now", started_at=now))
@@ -655,15 +657,20 @@ def _test_view(t: GradedTest) -> dict:
 
 @app.get("/api/stats")
 def stats(conn=Depends(get_conn)) -> dict:
-    """Usage numbers from the start loop: pings, answers, and how long starting took."""
+    """Usage numbers from the start loop: pings, answers, how long starting took, and how late
+    starts come on each weekday (with the "you usually start late on Tuesdays" lines)."""
     pings = db.list_pings(conn)
+    blocks = db.list_blocks(conn)
     delays = [(p.started_at - p.sent_at).total_seconds() / 60 for p in pings if p.started_at]
+    started = habits.starts(pings, blocks)
     return {
         "pings": len(pings),
         "answers": dict(Counter(p.answer for p in pings)),
         "starts": len(delays),
         "avg_minutes_to_start": round(sum(delays) / len(delays), 1) if delays else None,
-        "blocks": dict(Counter(b.status for b in db.list_blocks(conn))),
+        "blocks": dict(Counter(b.status for b in blocks)),
+        "weekdays": habits.weekdays(started, blocks),
+        "habits": habits.lines(started),
     }
 
 

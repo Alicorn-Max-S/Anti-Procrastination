@@ -116,6 +116,7 @@
 .pd-main { flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 40px; }
 .pd-main.checklist { gap: 32px; }
 .pd-main.cornell { gap: 36px; }
+.pd-main.pd-quick { max-width: 760px; }
 .pd-side { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 36px; }
 .pd-sec { display: flex; flex-direction: column; gap: 12px; padding-top: 18px; border-top: 1px solid var(--pd-line); min-width: 0; }
 .pd-sec.tight { gap: 4px; }

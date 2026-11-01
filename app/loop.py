@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from app import checkin, db, prep, push, scheduler, sync
 from app.clock import as_local, clock
 from app.config import settings
-from app.models import Block, Ping
+from app.models import Assignment, Block, Ping, PrepCard
 from app.progress import Progress
 
 log = logging.getLogger(__name__)
@@ -45,23 +45,54 @@ def save_clock(conn: sqlite3.Connection) -> None:
 
 
 def replan(conn: sqlite3.Connection, now: datetime) -> list[Block]:
-    """Plan blocks for upcoming assignments that don't have a live one. Returns the new, saved blocks.
+    """Plan blocks for upcoming assignments that don't have a live one (tests: their practice
+    sessions). Returns the new, saved blocks.
 
     A missed block is history, so an assignment whose block was missed gets a new one right away;
     the check-in then asks the student to keep that time or pick another.
     """
     horizon = now + timedelta(days=settings.card_horizon_days)
     assignments = [a for a in db.list_assignments(conn) if a.due_at and a.due_at <= horizon]
+    cards = db.list_cards(conn)
+    _drop_long_blocks(conn, assignments, cards)
     existing = [b for b in db.list_blocks(conn) if b.status != "missed"]
-    new = scheduler.plan_blocks(assignments, db.list_cards(conn), now, existing)
+    new = scheduler.plan_blocks(assignments, cards, now, existing)
     for b in new:
         b.id = db.save_block(conn, b)
     return new
 
 
+def _drop_long_blocks(conn: sqlite3.Connection, assignments: list[Assignment], cards: list[PrepCard]) -> None:
+    """A test or quick task planned as one long work block (before its card said what it is, or
+    before tests got practice sessions) loses that block if it was never pinged, so it gets its
+    short ones."""
+    by_card = {c.assignment_id: c for c in cards}
+    longest: dict[int, timedelta] = {}
+    for a in assignments:
+        card = by_card.get(a.id)
+        if scheduler.is_test(a, card) or (card and card.quick):
+            longest[a.id] = timedelta(minutes=scheduler.block_minutes(a, card))
+    for b in db.list_blocks(conn):
+        if (
+            b.assignment_id in longest
+            and b.status == "planned"
+            and b.end - b.start > longest[b.assignment_id]
+            and db.latest_ping(conn, b.id) is None
+        ):
+            db.delete_block(conn, b.id)
+
+
+def block_name(a: Assignment | None, card: PrepCard | None, assignment_id: int) -> str:
+    """What a block is called: the assignment, or for a test "Practice for Quiz: …", so the week
+    never reads as if the quiz itself were at that time."""
+    if a is None:
+        return f"Assignment {assignment_id}"
+    return f"Practice for {a.name}" if scheduler.is_test(a, card) else a.name
+
+
 def _name(conn: sqlite3.Connection, assignment_id: int) -> str:
     a = db.get_assignment(conn, assignment_id)
-    return a.name if a else "your assignment"
+    return block_name(a, db.get_card(conn, assignment_id), assignment_id) if a else "your assignment"
 
 
 def when(dt: datetime) -> str:

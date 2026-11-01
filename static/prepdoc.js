@@ -14,6 +14,7 @@ const PD_TEMPLATE_NAMES = { document: "Document", checklist: "Checklist", dashbo
 const PD_DEFAULT_TEMPLATE = { reading: "document", problem_set: "checklist", test: "dashboard", essay: "dashboard", lab: "checklist", other: "checklist" };
 const PD_KIND_NAMES = { reading: "Reading", problem_set: "Problem set", test: "Test", essay: "Essay", lab: "Lab", other: "Assignment" };
 const PD_EFFORT_MINUTES = { light: 30, medium: 60, heavy: 90 }; // scheduler.DURATION_MINUTES
+const PD_QUICK_MINUTES = 10; // scheduler.QUICK_MINUTES
 
 let pdOpen = null; // the assignment whose prep doc is showing, or null for the list
 let pdLastKey = "";
@@ -362,7 +363,8 @@ function pdList() {
     const steps = pdSteps(c);
     const cur = pdCurrent(steps, pdChecked(c));
     info.append(kicker, el("p", "name", c.name || `Assignment ${c.assignment_id}`));
-    if (!c.done) info.append(el("p", "first", cur < 0 ? "All steps done. Turn it in." : `${cur === 0 ? "Start here" : `Step ${cur + 1}`}: ${steps[cur].text}`));
+    const first = c.quick ? `Quick task: ${c.first_step}` : cur < 0 ? "All steps done. Turn it in." : `${cur === 0 ? "Start here" : `Step ${cur + 1}`}: ${steps[cur].text}`;
+    if (!c.done) info.append(el("p", "first", first));
     if (!c.done && c.past_due) info.append(el("p", "flag", `Past due since ${fmtDayTime(new Date(c.due_at))}`));
     else if (!c.done && c.missed) info.append(el("p", "flag", `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`));
     const go = el("span", "go", "Open");
@@ -401,7 +403,7 @@ function pdDoc(c, askNotes) {
   // design keeps for things that aren't the hero or a watch-out.
   if (alert) wrap.append(alert);
   if (st.failed) wrap.append(pdFailed(c, st.failed));
-  wrap.append(st.generating ? pdGenerating(c) : PD_RENDER[tpl](c));
+  wrap.append(st.generating ? pdGenerating(c) : c.quick ? pdQuick(c) : PD_RENDER[tpl](c));
   if (askNotes) wrap.append(notesAsk(c));
   wrap.append(pdFoot(c));
   root.append(wrap);
@@ -419,7 +421,7 @@ function pdHeader(c, tpl) {
     closeDoc();
   });
   const right = el("div", "pd-controls-right");
-  right.append(pdBtn("Start focus", "soft ui", () => startFocus(c), "target"), pdSwitcher(c, tpl));
+  if (!c.quick) right.append(pdBtn("Start focus", "soft ui", () => startFocus(c), "target"), pdSwitcher(c, tpl));
   controls.append(back, right);
   const title = el("div", "pd-title");
   const kicker = el("p", "pd-kicker");
@@ -462,7 +464,7 @@ function pdSwitcher(c, tpl) {
 // buttons the old card had.
 function pdFoot(c) {
   const foot = el("footer", "pd-foot");
-  const notes = [`${pdCap(c.effort)} effort`];
+  const notes = [c.quick ? "Quick task" : `${pdCap(c.effort)} effort`];
   if (c.generated_by === "demo") notes.push("Demo card.");
   if (c.generated_by === "fallback") notes.push(c.model_error ? `Template card: the model call failed (${c.model_error}).` : "Template card.");
   if (c.stale) notes.push("This card will be rebuilt on the next sync.");
@@ -540,6 +542,33 @@ function pdGenerating(c) {
   return row;
 }
 
+// ---- Quick task (a form, a signature): the one action, no template -------------------------------
+
+function pdQuick(c) {
+  const main = el("div", "pd-main pd-quick");
+  const hero = el("section", "pd-hero");
+  if (c.done) {
+    hero.append(el("h2", "pd-over strong", "Done"), el("p", "pd-hero-text", "This one is marked done."));
+  } else {
+    hero.append(el("h2", "pd-over strong", `Quick task · about ${PD_QUICK_MINUTES} min`), el("p", "pd-hero-text", c.first_step));
+    if (c.next_block) hero.append(el("p", "pd-sub", `Planned for ${fmtDayTime(new Date(c.next_block))}.`));
+    const actions = el("div", "pd-actions");
+    const src = pdSource(c);
+    if (src) {
+      const open = pdLink(src.label, "hero", src.url, "arrow-right");
+      open.addEventListener("click", () => pdStarted(c)); // opening the form is starting
+      actions.append(open);
+    }
+    actions.append(pdBtn("Mark it done", "hero-outline", () => pdMarkDone(c)));
+    hero.append(actions);
+  }
+  main.append(hero);
+  const warn = pdWatchOut(c);
+  if (warn) main.append(warn);
+  if (pdFiles(c).length > 1) main.append(pdFilesSection(c));
+  return main;
+}
+
 // ---- Document (readings) ------------------------------------------------------------------------
 
 function pdStartHere(c, steps, checked) {
@@ -549,19 +578,7 @@ function pdStartHere(c, steps, checked) {
   if (cur < 0) {
     hero.append(el("h2", "pd-over strong", "All steps done"), el("p", "pd-hero-text", c.done ? "This one is marked done." : "Turn it in, then mark it done."));
     if (pdIsWeb(c.html_url)) actions.append(pdLink("Open in Canvas", "hero", c.html_url, "arrow-right"));
-    if (!c.done) {
-      actions.append(
-        pdBtn("Mark it done", "hero-outline", async () => {
-          try {
-            await post(`/api/assignments/${c.assignment_id}/done`);
-            renderedKeys.week = "";
-            await refresh(true);
-          } catch (e) {
-            toast(e.message);
-          }
-        }),
-      );
-    }
+    if (!c.done) actions.append(pdBtn("Mark it done", "hero-outline", () => pdMarkDone(c)));
     hero.append(actions);
     return hero;
   }
@@ -586,6 +603,29 @@ function pdStartHere(c, steps, checked) {
   );
   hero.append(actions);
   return hero;
+}
+
+async function pdMarkDone(c) {
+  try {
+    await post(`/api/assignments/${c.assignment_id}/done`);
+    renderedKeys.week = "";
+    await refresh(true);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+// Starting (entering Focus, or opening a quick task's form) is recorded like "Start now", once.
+async function pdStarted(c) {
+  if (c.started || c.done) return;
+  try {
+    await post(`/api/assignments/${c.assignment_id}/start`);
+    c.started = true;
+    renderedKeys.week = "";
+    refresh(true);
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 function pdDocument(c) {
@@ -1082,17 +1122,7 @@ async function startFocus(c) {
   pdRenderFocus();
   clearInterval(pdFocusTimer);
   pdFocusTimer = setInterval(pdTick, 1000);
-  // Entering Focus is starting: the start loop records it like "Start now" (once per session).
-  if (!c.started && !c.done) {
-    try {
-      await post(`/api/assignments/${c.assignment_id}/start`);
-      c.started = true;
-      renderedKeys.week = "";
-      refresh(true);
-    } catch (e) {
-      toast(e.message);
-    }
-  }
+  await pdStarted(c);
 }
 
 // Reset the timer to the current step's estimate.

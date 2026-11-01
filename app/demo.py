@@ -2,6 +2,8 @@
 
 `python -m app.demo` loads four made-up courses with graded history, upcoming work, prep cards
 and graded-test rows, dated relative to the (possibly simulated) clock, then plans the week.
+`python -m app.demo --usage` also adds three made-up weeks of pings, answers and starts (see
+USAGE), the fallback for the video's starting stats if real use is thin; say so in the submission.
 `python -m app.demo --clear` removes it again. Demo ids sit in 9_000_000..9_099_999 so they never
 collide with real Canvas ids. Nothing here is real student data.
 """
@@ -11,7 +13,18 @@ from datetime import datetime, timedelta
 
 from app import db, loop
 from app.clock import clock, local_tz
-from app.models import Assignment, Course, Link, PracticeQuestion, PrepCard, RubricScore, SubmissionComment, TestRow
+from app.models import (
+    Assignment,
+    Block,
+    Course,
+    Link,
+    Ping,
+    PracticeQuestion,
+    PrepCard,
+    RubricScore,
+    SubmissionComment,
+    TestRow,
+)
 
 ID_MIN, ID_MAX = 9_000_000, 9_099_999
 
@@ -244,6 +257,42 @@ def _test_rows() -> list[TestRow]:
     ]
 
 
+# Made-up start history for --usage: weekday (Monday 0) -> minutes late for each of the last three
+# weeks, oldest first, all planned for 4 PM. Under 15 is a plain late start, under 60 is "+15 min"
+# until the start, 60 or more is a missed start moved to a picked time. Tuesdays run about 25 min
+# late (the Dashboard's one "you usually start late" line); one Thursday miss moves to 7 PM.
+USAGE = {0: (3, 0, 5), 1: (22, 31, 25), 2: (4, 8, 2), 3: (6, 185, 9), 4: (0, 5, 12), 6: (14, 2, 6)}
+USAGE_ASSIGNMENTS = (9_000_101, 9_000_102, 9_000_103)  # the graded history, so the week stays as planned
+
+
+def _session(conn, assignment_id: int, planned: datetime, late: int) -> None:
+    m = timedelta(minutes=1)
+    length = 45 * m
+    begun = planned + late * m
+    ping_at = planned
+    if late >= 60:
+        ping_at = begun - 5 * m  # the picked time; the start comes 5 min after its ping
+        miss = db.save_block(conn, Block(assignment_id=assignment_id, start=planned, end=planned + length, status="missed"))
+        db.save_ping(conn, Ping(block_id=miss, sent_at=planned, answer="pick_time", picked_time=ping_at))
+    block = db.save_block(conn, Block(assignment_id=assignment_id, start=begun, end=begun + length, status="done"))
+    while ping_at + 15 * m <= begun:
+        db.save_ping(conn, Ping(block_id=block, sent_at=ping_at, answer="plus_15"))
+        ping_at += 15 * m
+    db.save_ping(conn, Ping(block_id=block, sent_at=ping_at, answer="start_now", started_at=begun))
+
+
+def _usage(conn, now: datetime) -> None:
+    """Save USAGE's sessions, each on the latest such weekday before today and the two weeks before."""
+    four = now.astimezone(local_tz()).replace(hour=16, minute=0, second=0, microsecond=0)
+    n = 0
+    for day, lates in USAGE.items():
+        back = (four.weekday() - day) % 7 or 7
+        for week, late in enumerate(lates):
+            planned = four - timedelta(days=back + 7 * (len(lates) - 1 - week))
+            _session(conn, USAGE_ASSIGNMENTS[n % len(USAGE_ASSIGNMENTS)], planned, late)
+            n += 1
+
+
 def clear(conn) -> None:
     ids = (ID_MIN, ID_MAX)
     conn.execute("DELETE FROM pings WHERE block_id IN (SELECT id FROM blocks WHERE assignment_id BETWEEN ? AND ?)", ids)
@@ -255,8 +304,9 @@ def clear(conn) -> None:
     conn.commit()
 
 
-def seed(conn, now: datetime | None = None) -> None:
-    """Replace any existing demo data with a fresh copy dated around `now`, and plan the week."""
+def seed(conn, now: datetime | None = None, usage: bool = False) -> None:
+    """Replace any existing demo data with a fresh copy dated around `now`, and plan the week.
+    `usage` adds the made-up start history (USAGE)."""
     now = now or clock.now()
     clear(conn)
     for c in COURSES:
@@ -266,6 +316,8 @@ def seed(conn, now: datetime | None = None) -> None:
     for card in _cards():
         db.save_card(conn, card)
     db.save_test_rows(conn, _test_rows())
+    if usage:
+        _usage(conn, now)
     loop.replan(conn, now)
 
 
@@ -277,5 +329,7 @@ if __name__ == "__main__":
         print("Demo data removed.")
     else:
         loop.load_clock(conn)  # date the demo around the simulated clock if one is set
-        seed(conn)
-        print(f"Demo data loaded around {clock.now():%a %b %d %I:%M %p}. Start the server and open http://localhost:8000")
+        usage = "--usage" in sys.argv
+        seed(conn, usage=usage)
+        extra = " with three made-up weeks of starts" if usage else ""
+        print(f"Demo data loaded around {clock.now():%a %b %d %I:%M %p}{extra}. Start the server and open http://localhost:8000")

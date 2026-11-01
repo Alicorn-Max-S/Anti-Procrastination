@@ -372,6 +372,7 @@ function checkinBox(b) {
   else {
     box.append(el("h2", null, `Time to start: ${b.name}`));
     box.append(el("p", null, b.first_step ? `First step: ${b.first_step}` : "Open the prep card for your first step."));
+    if (b.habit) box.append(el("p", "muted", b.habit));
   }
   box.append(...startButtons(b));
   return box;
@@ -435,6 +436,7 @@ async function answer(blockId, ans, pickedTime) {
     const r = await post(`/api/blocks/${blockId}/checkin`, { answer: ans, picked_time: pickedTime ?? null, endpoint: await pushEndpoint() });
     movedIds = new Set([...r.moved, r.block.id]); // r.block is the new block when a miss was answered
     renderedKeys.week = "";
+    $("#clock-msg").hidden = true; // what the clock change did ("moved to Tue 5:15 PM") is out of date now
     if (ans === "start_now") toast(r.block.first_step ? `Go: ${r.block.first_step}` : "Go!", 6000);
     else if (ans === "plus_15") toast("OK, I'll ping you again in 15 minutes.");
     else {
@@ -498,6 +500,7 @@ async function loadCards() {
     return;
   }
   renderCards();
+  renderNotesSettings(); // the Dashboard may have drawn its course list before the cards came in
 }
 
 // The Cards tab is the assignment list or one prep doc (prepdoc.js).
@@ -956,6 +959,35 @@ function renderStats(s) {
     stat(s.answers.plus_15 ?? 0, "+15 min snoozes"),
     stat(s.blocks.missed ?? 0, "missed blocks"),
   );
+  renderWeekdays(s);
+}
+
+// How late starts come by weekday, counted from the first ping (a missed start that moved to the
+// evening counts from its first time), and the "You usually start 25 min late on Tuesdays" lines.
+function renderWeekdays(s) {
+  const root = $("#weekdays");
+  const days = s.weekdays || [];
+  if (!days.some((d) => d.starts || d.missed)) {
+    root.replaceChildren();
+    return;
+  }
+  const table = el("table");
+  const head = el("tr");
+  head.append(el("th"), el("th", null, "Starts"), el("th", null, "Usually late by"), el("th", null, "Missed"));
+  table.append(head);
+  for (const d of days) {
+    const tr = el("tr");
+    tr.append(
+      el("th", null, d.day),
+      el("td", "cell", String(d.starts)),
+      el("td", "cell", d.median_late == null ? "–" : `${d.median_late} min`),
+      el("td", "cell", String(d.missed)),
+    );
+    table.append(tr);
+  }
+  const wrap = el("div", "table-wrap weekdays");
+  wrap.append(table);
+  root.replaceChildren(...(s.habits || []).map((t) => el("p", "habit", t)), wrap);
 }
 
 $("#course-select").addEventListener("change", (e) => {

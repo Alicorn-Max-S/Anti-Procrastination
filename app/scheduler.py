@@ -4,6 +4,8 @@ Pure logic over models.py types; no network, no DB (callers load/save with db.py
 from due_at: heavier assignments get longer blocks that start more days ahead, blocks never
 overlap, and they sit inside a daily window (WORK_START_HOUR to WORK_END_HOUR, local time). Only
 when nothing fits before the due date does a block go outside the window or get flagged at_risk.
+A test gets several short practice sessions instead, one on each of the days before it, and a
+quick task (a form, a signature) one QUICK_MINUTES block.
 """
 
 from datetime import datetime, timedelta
@@ -15,6 +17,10 @@ from app.models import Assignment, Block, PrepCard
 SLOT = timedelta(minutes=15)
 DURATION_MINUTES = {"light": 30, "medium": 60, "heavy": 90}
 LEAD_DAYS = {"light": 1, "medium": 2, "heavy": 3}
+PRACTICE_MINUTES = 20  # one practice session for a test
+PRACTICE_SESSIONS = {"light": 2, "medium": 3, "heavy": 4}
+PRACTICE_GAP = timedelta(hours=2)  # two practice sessions on one day sit at least this far apart
+QUICK_MINUTES = 10  # a quick task's block
 ACTIVE = {"planned", "pinged", "started"}
 MAX_LATE_PING = timedelta(hours=1)  # a planned block later than this is missed, not pinged
 STALE_MISSED = timedelta(hours=3)  # unanswered missed blocks older than this get a fresh block
@@ -75,6 +81,59 @@ def _is_live(b: Block, now: datetime) -> bool:
     return b.status in ACTIVE or (b.status == "missed" and now - b.end < STALE_MISSED)
 
 
+def is_test(a: Assignment, card: PrepCard | None) -> bool:
+    """Whether the student sits this one (its blocks are practice sessions). The card's kind wins;
+    before there's a card, the title guess and Canvas quizzes count."""
+    if card is not None:
+        return card.kind == "test"
+    return a.kind == "test" or "online_quiz" in a.submission_types
+
+
+def block_minutes(a: Assignment, card: PrepCard | None) -> int:
+    """How long one block for this assignment runs: a quick task's, a test's practice session, or
+    a work block by effort."""
+    if card is not None and card.quick:
+        return QUICK_MINUTES
+    if is_test(a, card):
+        return PRACTICE_MINUTES
+    return DURATION_MINUTES[card.effort if card else "medium"]
+
+
+def _practice(
+    a: Assignment, effort: str, mine: list[Block], busy: Busy, earliest: datetime, window: Window
+) -> list[Block]:
+    """The practice sessions a test still needs: PRACTICE_SESSIONS[effort] minus the live ones in
+    `mine`. A fresh plan puts one on each of the days before the test, the last on the day before
+    (or today, if that's later); a missed one's replacement goes at the soonest time. Sessions of
+    one test sit PRACTICE_GAP apart, so days short of sessions get two. A session that can't be
+    spaced in the window before the test is left out, but a test always gets at least one.
+    Adds the new ones to `busy`."""
+    need = PRACTICE_SESSIONS[effort] - len(mine)
+    length = timedelta(minutes=PRACTICE_MINUTES)
+    tz = local_tz()
+    today = earliest.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    last = max(today, (a.due_at.astimezone(tz) - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0))
+    days = [today] * need if mine else [max(today, last - timedelta(days=need - 1 - i)) for i in range(need)]
+    spaced = [(b.start - PRACTICE_GAP, b.end + PRACTICE_GAP) for b in mine]
+    out: list[Block] = []
+    for day in days:
+        start = find_slot(max(earliest, day), length, busy + spaced, a.due_at, window) or find_slot(
+            earliest, length, busy + spaced, a.due_at, window
+        )
+        at_risk = False
+        if start is None:
+            if mine or out:
+                continue
+            start = find_slot(earliest, length, busy, a.due_at, None)
+            at_risk = start is None
+            start = start or find_slot(earliest, length, busy) or earliest
+        block = Block(assignment_id=a.id, start=start, end=start + length, at_risk=at_risk)
+        out.append(block)
+        busy.append((block.start, block.end))
+        spaced.append((block.start - PRACTICE_GAP, block.end + PRACTICE_GAP))
+    return out
+
+
 def plan_blocks(
     assignments: list[Assignment],
     cards: list[PrepCard],
@@ -82,28 +141,38 @@ def plan_blocks(
     existing: list[Block] | None = None,
     window: Window | None = None,
 ) -> list[Block]:
-    """Propose a planned Block for every unfinished assignment due after `now` that doesn't already
-    have a live or done block. Returns only the new blocks (without ids)."""
+    """Propose planned Blocks for every unfinished assignment due after `now` that isn't marked
+    done: one work block, or for a test its practice sessions (see `_practice`). An assignment
+    with live blocks gets nothing more, except a test short of sessions (a missed one's
+    replacement). Returns only the new blocks (without ids)."""
     window = window or default_window()
-    effort = {c.assignment_id: c.effort for c in cards}
+    by_card = {c.assignment_id: c for c in cards}
     busy: Busy = []
-    covered: set[int] = set()
+    live: dict[int, list[Block]] = {}
+    done: set[int] = set()
     for b in existing or []:
         if _is_live(b, now):
             busy.append((b.start, b.end))
-        if _is_live(b, now) or b.status == "done":
-            covered.add(b.assignment_id)
+            live.setdefault(b.assignment_id, []).append(b)
+        if b.status == "done":
+            done.add(b.assignment_id)
 
     todo = sorted(
-        (a for a in assignments if not a.submitted and a.due_at and a.due_at > now and a.id not in covered),
+        (a for a in assignments if not a.submitted and a.due_at and a.due_at > now and a.id not in done),
         key=lambda a: a.due_at,
     )
     earliest = ceil_slot(now)
     tz = local_tz()
     new: list[Block] = []
     for a in todo:
-        e = effort.get(a.id, "medium")
-        length = timedelta(minutes=DURATION_MINUTES[e])
+        card = by_card.get(a.id)
+        e = card.effort if card else "medium"
+        if is_test(a, card):
+            new += _practice(a, e, live.get(a.id, []), busy, earliest, window)
+            continue
+        if a.id in live:
+            continue
+        length = timedelta(minutes=block_minutes(a, card))
         lead_day = (a.due_at.astimezone(tz) - timedelta(days=LEAD_DAYS[e])).replace(
             hour=0, minute=0, second=0, microsecond=0
         )

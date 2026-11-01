@@ -100,6 +100,58 @@ def test_stale_missed_block_gets_replanned():
     assert plan_blocks([assignment(1, at(5, 23))], [], now, [recent], window=WINDOW) == []
 
 
+def quiz_card(id, effort="medium", kind="test"):
+    return PrepCard(assignment_id=id, kind=kind, summary="", first_step="", steps=[], effort=effort)
+
+
+def spans(blocks):
+    return [(b.start, b.end - b.start) for b in sorted(blocks, key=lambda b: b.start)]
+
+
+def test_a_test_gets_short_practice_sessions_on_the_days_before_it():
+    # quiz Friday 9 AM, planned Monday: one 20-minute session on each of Tue, Wed and Thu
+    blocks = plan_blocks([assignment(1, at(6, 9))], [quiz_card(1)], at(2, 10), window=WINDOW)
+    twenty = timedelta(minutes=20)
+    assert spans(blocks) == [(at(3, 15), twenty), (at(4, 15), twenty), (at(5, 15), twenty)]
+    heavy = plan_blocks([assignment(1, at(6, 9))], [quiz_card(1, "heavy")], at(2, 10), window=WINDOW)
+    assert [s for s, _ in spans(heavy)] == [at(2, 15), at(3, 15), at(4, 15), at(5, 15)]
+
+
+def test_a_test_tomorrow_gets_its_sessions_today_two_hours_apart():
+    blocks = plan_blocks([assignment(1, at(3, 9))], [quiz_card(1)], at(2, 10), window=WINDOW)
+    assert [s for s, _ in spans(blocks)] == [at(2, 15), at(2, 17, 30), at(2, 20)]
+
+
+def test_a_test_with_no_room_gets_fewer_sessions_not_crammed_ones():
+    blocks = plan_blocks([assignment(1, at(3, 9))], [quiz_card(1)], at(2, 19), window=WINDOW)
+    assert [s for s, _ in spans(blocks)] == [at(2, 19)]
+
+
+def test_a_missed_practice_session_is_replaced_and_a_done_test_gets_none():
+    live = [
+        Block(id=2, assignment_id=1, start=at(3, 15), end=at(3, 15, 20)),
+        Block(id=3, assignment_id=1, start=at(4, 15), end=at(4, 15, 20)),
+    ]
+    [b] = plan_blocks([assignment(1, at(6, 9))], [quiz_card(1)], at(2, 16), live, window=WINDOW)
+    assert b.start == at(2, 16) and b.end == at(2, 16, 20)  # the soonest time, as for any miss
+    done = [Block(id=4, assignment_id=1, start=at(2, 9), end=at(2, 9), status="done")]
+    assert plan_blocks([assignment(1, at(6, 9))], [quiz_card(1)], at(2, 16), done, window=WINDOW) == []
+
+
+def test_the_card_decides_what_counts_as_a_test():
+    quiz = assignment(1, at(6, 9)).model_copy(update={"kind": "test"})
+    assert len(plan_blocks([quiz], [], at(2, 10), window=WINDOW)) == 3  # no card yet: the title guess
+    assert len(plan_blocks([quiz], [quiz_card(1, kind="problem_set")], at(2, 10), window=WINDOW)) == 1
+    canvas_quiz = assignment(1, at(6, 9)).model_copy(update={"submission_types": ["online_quiz"]})
+    assert len(plan_blocks([canvas_quiz], [], at(2, 10), window=WINDOW)) == 3
+
+
+def test_a_quick_task_gets_one_ten_minute_block_the_day_before():
+    quick = PrepCard(assignment_id=1, kind="other", summary="", first_step="", steps=[], effort="light", quick=True)
+    [b] = plan_blocks([assignment(1, at(4, 23, 59))], [quick], at(2, 10), window=WINDOW)
+    assert b.start == at(3, 15) and b.end - b.start == timedelta(minutes=10)
+
+
 def test_due_ping_and_mark_missed():
     planned = Block(id=1, assignment_id=1, start=at(2, 16), end=at(2, 17))
     assert due_ping([planned], at(2, 15, 59)) is None

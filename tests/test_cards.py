@@ -63,6 +63,19 @@ def test_a_canvas_quiz_is_always_a_test():
     assert prep.decide_kind(Assignment(id=2, course_id=1, name="x"), "lab") == "lab"
 
 
+def test_a_quick_task_is_its_one_action_and_never_a_test(conn, model):
+    replies, _ = model
+    form = Assignment(id=4, course_id=1, name="Field trip form", kind="other",
+                      description_html="<p>Fill out the permission form by Friday.</p>")
+    replies.append(draft(kind="other", quick=True, first_step="Fill out the field trip permission form.", effort="medium"))
+    card = prep.build_prep_card(conn, form)
+    assert card.quick and card.steps == [] and card.effort == "light"
+    assert card.first_step == "Fill out the field trip permission form."
+    replies.append(draft(kind="test", quick=True))
+    quiz = prep._model_card(conn, Assignment(id=5, course_id=1, name="Check-in", kind="other", description_html="<p>A short quiz.</p>"))
+    assert quiz.kind == "test" and not quiz.quick and quiz.steps == ["a", "b", "c"]
+
+
 def test_missing_instructions_are_said_not_invented(conn, model):
     replies, prompts = model
     lab = Assignment(id=3, course_id=1, name="Lab: Vector Force Table", kind="lab",

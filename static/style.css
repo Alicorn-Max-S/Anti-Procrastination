@@ -324,6 +324,8 @@ td.cell.hot small { color: rgba(255, 255, 255, 0.8); }
 .evidence li { margin: 0.35rem 0; }
 .stats { display: flex; gap: 1.5rem; flex-wrap: wrap; }
 .stat b { display: block; font-size: 1.4rem; }
+.habit { font-weight: 600; margin: 1rem 0 0.25rem; }
+.weekdays table { width: auto; }
 .weak-list { margin: 0.5rem 0 0; padding-left: 1.1rem; }
 
 /* ---- toast ---- */

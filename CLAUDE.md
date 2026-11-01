@@ -50,7 +50,7 @@ When behind, drop in this order. Rungs 1 to 5 are already cut.
 
 ## Schedule and freeze
 
-- **MVP freeze: Sat Oct 31, 8 PM.** It can move earlier, never later. After it there are no new features, only fixes to bugs that show on camera. Hackathon deadline is Wed Nov 4, 6 PM PT.
+- **MVP freeze: Sat Oct 31, 10 PM.** It can move earlier, never later. After it there are no new features, only fixes to bugs that show on camera. Hackathon deadline is Wed Nov 4, 6 PM PT.
 - Build targets, not status. Thu Oct 29: start loop (blocks, simulated clock, notification, check-in with start now / +15 min / pick a time, reflow), then HTTPS deploy and Android push. Fri Oct 30: grader extraction (graded-test photos into per-question rows using a fixed type list per class) and the student model as a plain table. Sat Oct 31: test prep card (practice in the weakest cells, answers checked by a second solve), watch-out lines, templates for homework and test only.
 - A missed checkpoint gets its cut that same night instead of borrowing tomorrow's hours. Two misses in a row means dropping the next rung of the ladder.
 - The demo runs on the simulated clock. Make sure the start loop saves every ping, check-in answer and actual start to the database (`pings`), so real numbers exist without testers.
