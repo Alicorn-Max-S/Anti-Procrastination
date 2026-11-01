@@ -65,6 +65,8 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
 | `static/` | The single web page (`prepdoc.js` draws the prep docs), PWA manifest, service worker, icons |
 | `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
-| `tests/` | Tests, run with `pytest`; they never touch Canvas, the model or push |
+| `decider/` | System One decider: a separate FastAPI process (`python -m decider`, port 8090) that answers the multiple-choice decisions with local Muse Glimmer through llama-server. Not wired into the app yet |
+| `decisions/fields.py` | The decision fields and option order, shared by the labelling page and the decider |
+| `tests/` | Tests, run with `pytest`; they never touch Canvas, the model, push or llama-server |
 
 Real school data (the DB, attachments, test photos) lives under `data/`, which is gitignored. This repo is public.
