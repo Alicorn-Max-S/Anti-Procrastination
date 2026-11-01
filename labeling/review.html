@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review labels</title>
+<style>
+  :root { color-scheme: light; --bg:#f4f5f7; --card:#fff; --ink:#1b1e24; --mute:#667085; --line:#d3d8e0; --accent:#2f5bea; --ok:#1a7f4b; --okbg:#e8f5ee; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  button, input, select { font:inherit; color:var(--ink); }
+  header { position:sticky; top:0; z-index:1; background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; }
+  .top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .top h1 { margin:0; font-size:20px; }
+  .meta { color:var(--mute); }
+  .grow { flex:1; }
+  a.nav { padding:7px 12px; border:1px solid var(--line); border-radius:8px; color:var(--ink); text-decoration:none; }
+  a.nav:hover { background:#eef1f6; }
+  .filters { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .filters input, .filters select { padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .filters input { flex:1 1 220px; }
+  .filters select.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  main { padding:12px 16px 40px; max-width:1200px; margin:0 auto; }
+  .row { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; background:var(--card); border:1px solid var(--line); border-left:5px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:8px; }
+  .row.quick { border-left-color:var(--ok); background:var(--okbg); }
+  .row.saving { opacity:.6; pointer-events:none; }
+  .course { color:var(--mute); font-weight:600; text-transform:uppercase; font-size:12px; letter-spacing:.04em; }
+  .title { font-weight:700; font-size:16px; margin:2px 0; }
+  .facts { color:var(--mute); font-size:13px; }
+  .desc { margin-top:6px; white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .row.open .desc { display:block; }
+  .extra { display:none; margin-top:8px; font-size:13px; }
+  .row.open .extra { display:block; }
+  .extra ul { margin:2px 0 6px; padding-left:18px; }
+  .more { margin-top:4px; padding:0; border:0; background:none; color:var(--accent); cursor:pointer; font-size:13px; }
+  .none { color:var(--mute); font-style:italic; }
+  .labels { display:grid; grid-template-columns:max-content 1fr; gap:6px 8px; align-content:start; align-items:center; }
+  .labels label { color:var(--mute); font-size:13px; }
+  .labels select { width:100%; padding:5px 6px; font-size:14px; border:1px solid var(--line); border-radius:7px; background:#fff; }
+  .labels select.unset { color:var(--mute); border-style:dashed; }
+  .quickbtn { grid-column:1 / -1; margin-top:4px; padding:8px 10px; font-weight:600; border:2px solid var(--ok); border-radius:8px; background:#fff; color:var(--ok); cursor:pointer; }
+  .quickbtn:hover { background:var(--okbg); }
+  .row.quick .quickbtn { background:var(--ok); color:#fff; }
+  .empty { text-align:center; padding:60px 20px; color:var(--mute); }
+  @media (max-width: 760px) { .row { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <h1>Review labels</h1>
+    <span class="meta" id="meta"></span>
+    <span class="grow"></span>
+    <a class="nav" href="/">&larr; Back to labeling</a>
+  </div>
+  <div class="filters" id="filters">
+    <input id="q" type="search" placeholder="Search titles and descriptions" autocomplete="off">
+    <select id="fCourse"></select>
+    <select id="sort">
+      <option value="effort">Shortest effort first</option>
+      <option value="course">By class</option>
+      <option value="recent">Recently labeled first</option>
+    </select>
+  </div>
+</header>
+<main id="list"></main>
+
+<script>
+let D = null, byKey = {};
+const open = new Set();
+const $ = s => document.querySelector(s);
+const list = $('#list');
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fields = () => D.fields.assignment;
+const labelsOf = it => D.labels[it.key] || {};
+const optionLabel = (fkey, v) => (fields().find(f => f.key === fkey).options.find(o => o.value === v) || {}).label || v;
+const fieldName = f => f.key[0].toUpperCase() + f.key.slice(1);
+const labeled = () => D.items.filter(it => it.kind === 'assignment' && Object.keys(labelsOf(it)).length);
+
+async function load() {
+  D = await (await fetch('/api/items')).json();
+  byKey = Object.fromEntries(D.items.map(it => [it.key, it]));
+  buildFilters();
+  render();
+}
+
+function buildFilters() {
+  const opts = (all, xs) => `<option value="">${esc(all)}</option>` +
+    xs.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+  const courses = [...new Set(labeled().map(it => it.course))].sort();
+  $('#fCourse').innerHTML = opts('All classes', courses.map(c => ({ value: c, label: c })));
+  for (const f of fields()) {
+    const s = document.createElement('select');
+    s.id = `f-${f.key}`;
+    s.innerHTML = opts(`Any ${f.key}`, [...f.options, { value: '-', label: `No ${f.key} yet` }]);
+    $('#sort').before(s);
+  }
+}
+
+function render() {
+  const all = labeled(), q = $('#q').value.trim().toLowerCase(), course = $('#fCourse').value;
+  const want = fields().map(f => [f.key, $(`#f-${f.key}`).value]);
+  const shown = all.filter(it => {
+    const L = labelsOf(it);
+    if (course && it.course !== course) return false;
+    for (const [k, v] of want) if (v && (v === '-' ? L[k] : L[k] !== v)) return false;
+    return !q || `${it.title}\n${it.description}`.toLowerCase().includes(q);
+  });
+  sortItems(shown);
+  document.querySelectorAll('.filters select').forEach(s => s.classList.toggle('on', !!s.value && s.id !== 'sort'));
+  list.innerHTML = shown.length ? shown.map(rowHtml).join('') : '<p class="empty">Nothing matches these filters.</p>';
+  counts();
+}
+
+function counts() {
+  const all = labeled(), quick = all.filter(it => labelsOf(it).template === 'quick').length;
+  const shown = list.querySelectorAll('.row').length;
+  $('#meta').textContent = `Showing ${shown} of ${all.length} labeled · ${quick} quick task${quick === 1 ? '' : 's'}`;
+}
+
+function sortItems(xs) {
+  const rank = v => { const i = fields().find(f => f.key === 'effort').options.findIndex(o => o.value === v); return i < 0 ? 99 : i; };
+  const byCourse = (a, b) => a.course.localeCompare(b.course) || a.title.localeCompare(b.title);
+  const by = $('#sort').value;
+  if (by === 'recent') xs.sort((a, b) => (D.labeled_at[b.key] || '').localeCompare(D.labeled_at[a.key] || ''));
+  else if (by === 'course') xs.sort(byCourse);
+  else xs.sort((a, b) => rank(labelsOf(a).effort) - rank(labelsOf(b).effort) || byCourse(a, b));
+}
+
+// The template an undo of "quick" goes back to, if there was one before it.
+const undoTo = it => { const p = (D.previous[it.key] || {}).template; return p && p !== 'quick' ? p : null; };
+
+function rowHtml(it) {
+  const L = labelsOf(it), quick = L.template === 'quick', back = quick && undoTo(it);
+  const bullets = (xs, fmt) => xs.length ? `<ul>${xs.map(fmt).join('')}</ul>` : '<div class="none">none</div>';
+  const facts = [it.due || 'no due date', it.points != null ? `${it.points} pts` : null,
+                 it.submission_types.join(', ') || null].filter(Boolean).join(' · ');
+  const selects = fields().map(f => `<label for="${esc(it.key)}-${f.key}">${fieldName(f)}</label>
+    <select id="${esc(it.key)}-${f.key}" data-field="${f.key}"${L[f.key] ? '' : ' class="unset"'}>
+      ${L[f.key] ? '' : '<option value="">not labeled</option>'}
+      ${f.options.map(o => `<option value="${esc(o.value)}"${L[f.key] === o.value ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
+    </select>`).join('');
+  const btn = !quick ? 'Make it a quick task' : back ? `Quick task ✓ · undo (back to ${optionLabel('template', back)})` : 'Quick task ✓';
+  return `<article class="row${quick ? ' quick' : ''}${open.has(it.key) ? ' open' : ''}" data-key="${esc(it.key)}">
+    <div>
+      <div class="course">${esc(it.course)}</div>
+      <div class="title">${esc(it.title)}</div>
+      <div class="facts">${esc(facts)}</div>
+      ${it.description ? `<div class="desc">${esc(it.description)}</div>` : '<div class="desc none">no description</div>'}
+      <div class="extra">
+        <b>Attachments</b>${bullets(it.attachments, x => `<li>${esc(x)}</li>`)}
+        <b>Rubric</b>${bullets(it.rubric, r => `<li>${esc(r.criterion)}${r.points != null ? ` &mdash; ${r.points} pts` : ''}</li>`)}
+      </div>
+      <button class="more">${open.has(it.key) ? 'Less' : 'More'}</button>
+    </div>
+    <div class="labels">${selects}
+      <button class="quickbtn"${quick && !back ? ' title="Pick another template in the menu to change it"' : ''}>${esc(btn)}</button>
+    </div>
+  </article>`;
+}
+
+function rowOf(it) { return list.querySelector(`.row[data-key="${CSS.escape(it.key)}"]`); }
+
+// Saves one label and redraws only that row, so it stays put even if it no longer matches the
+// filters; the filters apply again the next time they change.
+async function setLabel(it, field, value) {
+  const row = rowOf(it), old = labelsOf(it)[field];
+  if (!value || value === old) return;
+  row.classList.add('saving');
+  try {
+    const r = await fetch('/api/label', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: it.id, item_kind: it.kind, field, label: value }) });
+    if (!r.ok) { alert('Could not save that label: ' + await r.text()); return; }
+    (D.labels[it.key] = D.labels[it.key] || {})[field] = value;
+    if (old) (D.previous[it.key] = D.previous[it.key] || {})[field] = old;
+    D.labeled_at[it.key] = new Date().toISOString();
+  } finally {
+    row.outerHTML = rowHtml(it);  // on a failed save this also puts the menu back
+    counts();
+  }
+}
+
+list.addEventListener('change', e => {
+  const s = e.target.closest('select');
+  if (s) setLabel(byKey[s.closest('.row').dataset.key], s.dataset.field, s.value);
+});
+list.addEventListener('click', e => {
+  const row = e.target.closest('.row');
+  if (!row) return;
+  const it = byKey[row.dataset.key];
+  if (e.target.closest('.more')) {
+    open.has(it.key) ? open.delete(it.key) : open.add(it.key);
+    row.classList.toggle('open');
+    e.target.textContent = open.has(it.key) ? 'Less' : 'More';
+    return;
+  }
+  if (e.target.closest('.quickbtn')) {
+    if (labelsOf(it).template !== 'quick') return setLabel(it, 'template', 'quick');
+    if (undoTo(it)) return setLabel(it, 'template', undoTo(it));
+    row.querySelector('select[data-field="template"]').focus();
+  }
+});
+$('#filters').addEventListener('input', render);
+
+load();
+</script>
+</body>
+</html>

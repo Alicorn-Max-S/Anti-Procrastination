@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Labeling</title>
+<style>
+  :root { color-scheme: light; --bg:#f4f5f7; --card:#fff; --ink:#1b1e24; --mute:#667085; --line:#d3d8e0; --accent:#2f5bea; --ok:#1a7f4b; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  header .count { font-size:20px; font-weight:700; }
+  header .meta { color:var(--mute); }
+  .grow { flex:1; }
+  button, input, select { font:inherit; color:var(--ink); }
+  button { cursor:pointer; }
+  button:disabled { opacity:.4; cursor:default; }
+  .nav { padding:8px 14px; border:1px solid var(--line); background:var(--card); border-radius:8px; }
+  .nav:hover { background:#eef1f6; }
+  a.nav { color:var(--ink); text-decoration:none; }
+  main { flex:1; min-height:0; display:grid; grid-template-columns: minmax(0,1.5fr) minmax(360px,1fr); gap:16px; padding:16px; }
+  .left, .right { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; overflow:auto; min-height:0; }
+  .course { color:var(--mute); font-weight:600; text-transform:uppercase; font-size:13px; letter-spacing:.04em; }
+  h1 { margin:4px 0 14px; font-size:26px; line-height:1.2; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0 0 16px; }
+  dt { color:var(--mute); }
+  dd { margin:0; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute); margin:18px 0 6px; }
+  .none { color:var(--mute); font-style:italic; }
+  .desc { white-space:pre-wrap; }
+  ul.plain { margin:0; padding-left:20px; }
+  .page { display:block; width:100%; margin:0 0 12px; border:1px solid var(--line); cursor:zoom-in; }
+  .page.full { width:auto; max-width:none; cursor:zoom-out; }
+  embed.page { height:80vh; cursor:auto; }
+  .small { padding:6px 10px; border:1px dashed var(--line); background:none; border-radius:8px; color:var(--mute); }
+  .field { margin-bottom:22px; padding:10px; border-radius:10px; border:2px solid transparent; }
+  .field.active { border-color:var(--accent); }
+  .field h3 { margin:0 0 10px; font-size:17px; }
+  .opts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .opt { display:flex; align-items:center; gap:10px; min-height:56px; padding:10px 12px; text-align:left; font-size:17px; background:#fff; border:2px solid var(--line); border-radius:10px; }
+  .opt:hover { border-color:var(--accent); }
+  .opt.sel { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .opt kbd { flex:none; min-width:26px; padding:1px 6px; text-align:center; font:600 14px ui-monospace, Consolas, monospace; background:#e9ecf3; color:#333; border-radius:5px; }
+  .opt.sel kbd { background:rgba(255,255,255,.28); color:#fff; }
+  .newtopic { display:flex; gap:8px; margin-top:10px; }
+  .newtopic input { flex:1; padding:12px; font-size:17px; border:2px solid var(--accent); border-radius:8px; }
+  .newtopic button { padding:0 18px; border:0; background:var(--accent); color:#fff; border-radius:8px; font-size:17px; }  .done { grid-column:1 / -1; text-align:center; padding:60px 20px; }
+  .done .go { display:inline-block; margin:6px; padding:14px 22px; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:18px; }
+  .done .go.alt { background:var(--card); color:var(--ink); border:1px solid var(--line); }
+  code { background:#eceff4; padding:1px 5px; border-radius:4px; }
+  dialog { border:1px solid var(--line); border-radius:12px; padding:22px; width:min(520px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  dialog label { display:block; margin:12px 0 4px; font-weight:600; }
+  dialog input, dialog select { width:100%; padding:10px; font:inherit; border:1px solid var(--line); border-radius:8px; }
+  dialog .row { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+  dialog .row button { padding:10px 18px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  dialog .row button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .err { color:#b42318; margin-top:10px; }
+  @media (max-width: 900px) { body { height:auto; } main { grid-template-columns:1fr; } .left, .right { overflow:visible; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="count" id="count"></span>
+  <span class="meta" id="meta"></span>
+  <span class="grow"></span>
+  <button class="nav" id="back" title="Left arrow">&larr; Back</button>
+  <button class="nav" id="skip" title="Right arrow">Skip &rarr;</button>
+  <button class="nav" id="upload">Upload tests</button>
+  <a class="nav" href="/review">Review labels</a>
+</header>
+<main id="main"></main>
+
+<dialog id="dlg">
+  <form id="upForm">
+    <h3 style="margin:0">Upload a graded test</h3>
+    <label for="upCourse">Class</label>
+    <select id="upCourse" name="course_id" required></select>
+    <label for="upName">Test name (optional)</label>
+    <input id="upName" name="name" placeholder="e.g. Unit 3 quiz">
+    <label for="upQ">How many questions are on it?</label>
+    <input id="upQ" name="questions" type="number" min="1" max="300" required>
+    <label for="upFiles">Pages (photos or a PDF, in order)</label>
+    <input id="upFiles" name="files" type="file" accept="image/*,.pdf" multiple required>
+    <div class="err" id="upErr"></div>
+    <div class="row">
+      <button type="button" id="upCancel">Cancel</button>
+      <button type="submit" class="primary" id="upGo">Upload</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+let D = null, idx = 0, active = null, wasComplete = false, busy = false, addingTopic = false;
+const $ = s => document.querySelector(s);
+const main = $('#main'), dlg = $('#dlg');
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fieldsOf = item => D.fields[item.kind];
+const labelsOf = item => D.labels[item.key] || {};
+const isComplete = item => fieldsOf(item).every(f => labelsOf(item)[f.key]);
+const firstIncomplete = () => { const i = D.items.findIndex(x => !isComplete(x)); return i < 0 ? D.items.length : i; };
+const optionsOf = (item, f) => f.per_class
+  ? (D.topics[item.course_id] || []).map(t => ({ value: t, label: t.replace(/_/g, ' ') }))
+  : f.options;
+
+async function load(jump = true) {
+  D = await (await fetch('/api/items')).json();
+  if (jump) idx = firstIncomplete();
+  idx = Math.min(idx, D.items.length);
+  show();
+}
+
+function go(i) { idx = Math.max(0, Math.min(i, D.items.length)); show(); }
+
+function show() {
+  addingTopic = false;
+  const n = D.items.length, done = D.items.filter(isComplete).length;
+  $('#count').textContent = idx < n ? `${idx + 1} of ${n}` : `${n} of ${n}`;
+  $('#meta').textContent = `${done} labeled`;
+  $('#back').disabled = idx === 0;
+  $('#skip').disabled = idx >= n;
+  if (idx >= n) return renderDone(n, done);
+  const item = D.items[idx];
+  wasComplete = isComplete(item);
+  const next = fieldsOf(item).find(f => !labelsOf(item)[f.key]);
+  active = (next || fieldsOf(item)[0]).key;
+  render();
+}
+
+function renderDone(n, done) {
+  const left = n - done;
+  main.innerHTML = `<div class="done">
+    <h1>${left ? `${left} of ${n} still unlabeled` : `All ${n} labeled`}</h1>
+    <p class="none">Saved to <code>${esc(D.labels_path)}</code></p>
+    ${left ? '<button class="go" id="firstLeft">Go to the first unlabeled</button>' : ''}
+    <button class="go alt" id="doneUpload">Upload more tests</button></div>`;
+  const b = $('#firstLeft'); if (b) b.onclick = () => go(firstIncomplete());
+  $('#doneUpload').onclick = openUpload;
+}
+
+function render() {
+  const item = D.items[idx];
+  main.innerHTML = `<section class="left">${item.kind === 'assignment' ? leftAssignment(item) : leftQuestion(item)}</section>
+                    <section class="right">${fieldsOf(item).map(f => fieldHtml(item, f)).join('')}</section>`;
+  const input = $('#topicInput');
+  if (input) input.focus();
+  const act = main.querySelector('.field.active');
+  if (act) act.scrollIntoView({ block: 'nearest' });
+}
+
+function leftAssignment(a) {
+  const list = (xs, fmt) => xs.length ? `<ul class="plain">${xs.map(fmt).join('')}</ul>` : '<span class="none">none</span>';
+  return `<div class="course">${esc(a.course)}</div>
+    <h1>${esc(a.title)}</h1>
+    <dl>
+      <dt>Due</dt><dd>${a.due ? esc(a.due) : '<span class="none">no due date</span>'}</dd>
+      <dt>Points</dt><dd>${a.points ?? '<span class="none">not set</span>'}</dd>
+      <dt>Submission types</dt><dd>${a.submission_types.length ? esc(a.submission_types.join(', ')) : '<span class="none">none</span>'}</dd>
+      <dt>Attachments</dt><dd>${list(a.attachments, x => `<li>${esc(x)}</li>`)}</dd>
+    </dl>
+    <h2>Rubric</h2>
+    ${list(a.rubric, r => `<li>${esc(r.criterion)}${r.points != null ? ` &mdash; ${r.points} pts` : ''}</li>`)}
+    <h2>Description</h2>
+    ${a.description ? `<div class="desc">${esc(a.description)}</div>` : '<span class="none">no description</span>'}`;
+}
+
+function leftQuestion(q) {
+  const pages = q.pages.map(p => p.pdf
+    ? `<embed class="page" src="${esc(p.url)}" type="application/pdf">`
+    : `<img class="page" src="${esc(p.url)}" alt="test page">`).join('');
+  return `<div class="course">${esc(q.course)} &middot; ${esc(q.test)}</div>
+    <h1>Question ${q.number} of ${q.of} on this test</h1>
+    <p><button class="small" id="addQ">+ This test has another question</button>
+       <span class="none">Click a page to zoom.</span></p>
+    ${pages}`;
+}
+
+function fieldHtml(item, f) {
+  const opts = optionsOf(item, f), cur = labelsOf(item)[f.key];
+  const buttons = opts.map((o, i) =>
+    `<button class="opt${cur === o.value ? ' sel' : ''}" data-field="${f.key}" data-value="${esc(o.value)}">
+       ${i < 9 ? `<kbd>${i + 1}</kbd>` : ''}${esc(o.label)}</button>`).join('');
+  const none = f.per_class
+    ? `<button class="opt" data-field="${f.key}" data-nonefit="1"><kbd>0</kbd>None of these fit</button>` : '';
+  const newTopic = f.per_class && addingTopic
+    ? `<div class="newtopic"><input id="topicInput" placeholder="New topic name, then Enter" autocomplete="off">
+       <button id="topicAdd">Add</button></div>` : '';
+  return `<div class="field${active === f.key ? ' active' : ''}" data-key="${f.key}">
+    <h3>${esc(f.question)}</h3><div class="opts">${buttons}${none}</div>${newTopic}</div>`;
+}
+
+async function choose(fkey, value) {
+  if (busy) return;
+  busy = true;
+  const item = D.items[idx];
+  try {
+    const r = await fetch('/api/label', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: item.id, item_kind: item.kind, field: fkey, label: value }) });
+    if (!r.ok) { alert('Could not save that label: ' + await r.text()); return; }
+    (D.labels[item.key] = D.labels[item.key] || {})[fkey] = value;
+    addingTopic = false;
+    const next = fieldsOf(item).find(f => !labelsOf(item)[f.key]);
+    if (next) active = next.key;
+    render();
+    if (!next && !wasComplete) setTimeout(() => { if (D.items[idx] === item) go(idx + 1); }, 220);
+  } finally { busy = false; }
+}
+
+async function addTopic() {
+  const input = $('#topicInput'), item = D.items[idx];
+  if (!input || !input.value.trim()) return;
+  const r = await fetch('/api/topic', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ course_id: item.course_id, name: input.value }) });
+  if (!r.ok) { alert('Could not add that topic: ' + await r.text()); return; }
+  const j = await r.json();
+  D.topics[item.course_id] = j.topics;
+  await choose('topic', j.topic);
+}
+
+function startAddingTopic() { addingTopic = true; active = 'topic'; render(); }
+
+main.addEventListener('click', e => {
+  const opt = e.target.closest('.opt');
+  if (opt) {
+    if (opt.dataset.nonefit) return startAddingTopic();
+    return choose(opt.dataset.field, opt.dataset.value);
+  }
+  if (e.target.id === 'topicAdd') return addTopic();
+  if (e.target.id === 'addQ') return addQuestion();
+  if (e.target.classList.contains('page') && e.target.tagName === 'IMG') e.target.classList.toggle('full');
+  const field = e.target.closest('.field');
+  if (field && active !== field.dataset.key) { active = field.dataset.key; render(); }
+});
+main.addEventListener('keydown', e => {
+  if (e.target.id === 'topicInput') {
+    if (e.key === 'Enter') addTopic();
+    if (e.key === 'Escape') { addingTopic = false; render(); }
+  }
+});
+
+async function addQuestion() {
+  const item = D.items[idx];
+  await fetch(`/api/tests/${item.test_id}/questions`, { method: 'POST' });
+  await load(false);
+}
+
+document.addEventListener('keydown', e => {
+  if (dlg.open || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || !D) return;
+  const item = D.items[idx];
+  if (e.key === 'ArrowLeft' || e.key === 'b') return go(idx - 1);
+  if (e.key === 'ArrowRight' || e.key === 's') return go(idx + 1);
+  if (!item) return;
+  const fs = fieldsOf(item), at = fs.findIndex(f => f.key === active);
+  if (e.key === 'ArrowDown' && at < fs.length - 1) { active = fs[at + 1].key; return render(); }
+  if (e.key === 'ArrowUp' && at > 0) { active = fs[at - 1].key; return render(); }
+  if (/^[0-9]$/.test(e.key)) {
+    const f = fs[at], opts = optionsOf(item, f), n = +e.key;
+    e.preventDefault();
+    if (n === 0) return f.per_class ? startAddingTopic() : undefined;
+    if (n <= Math.min(opts.length, 9)) choose(f.key, opts[n - 1].value);
+  }
+});
+
+$('#back').onclick = () => go(idx - 1);
+$('#skip').onclick = () => go(idx + 1);
+
+function openUpload() {
+  $('#upErr').textContent = '';
+  $('#upCourse').innerHTML = D.courses.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  dlg.showModal();
+}
+$('#upload').onclick = openUpload;
+$('#upCancel').onclick = () => dlg.close();
+$('#upForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const go_ = $('#upGo'); go_.disabled = true; $('#upErr').textContent = 'Uploading…';
+  try {
+    const r = await fetch('/api/tests', { method: 'POST', body: new FormData(e.target) });
+    if (!r.ok) { $('#upErr').textContent = (await r.json().catch(() => ({}))).detail || 'Upload failed'; return; }
+    dlg.close(); e.target.reset();
+    await load(true);
+  } finally { go_.disabled = false; }
+});
+
+load();
+</script>
+</body>
+</html>
