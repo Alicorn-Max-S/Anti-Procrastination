@@ -1,20 +1,28 @@
 // Prep doc theme: every color token from the class's subject color + light/dark mode.
-// A line-for-line JS port of the design handoff's theme.ts (frozen Oct 31 2026): the page has no
-// build step, so only the TypeScript types are dropped. Don't change the math here without
-// re-checking contrast: every text token is pushed until it passes WCAG AA (4.5:1).
+// A JS port of the design handoff's theme.ts (frozen Oct 31 2026): the page has no build step, so
+// only the TypeScript types are dropped. Don't change the math here without re-checking contrast:
+// every text token is pushed until it passes WCAG AA (4.5:1).
+// Nov 1 redesign: the page draws each class in a muted version of its color (`muted`), so the
+// classes sit together on a black-and-white page. The server still stores `hex`.
 
 const SUBJECT_COLORS = [
-  { id: "blue", name: "Blue", hex: "#3D5AFE" }, // default / app color
-  { id: "purple", name: "Purple", hex: "#7C3AED" },
-  { id: "pink", name: "Pink", hex: "#D6409F" },
-  { id: "red", name: "Red", hex: "#E5484D" },
-  { id: "orange", name: "Orange", hex: "#F0812A" },
-  { id: "yellow", name: "Yellow", hex: "#D9A21B" },
-  { id: "green", name: "Green", hex: "#2E9E5B" },
-  { id: "teal", name: "Teal", hex: "#0E9AA7" },
+  { id: "blue", name: "Blue", hex: "#3D5AFE", muted: "#6C7FA6" }, // default
+  { id: "purple", name: "Purple", hex: "#7C3AED", muted: "#8A7AA8" },
+  { id: "pink", name: "Pink", hex: "#D6409F", muted: "#B07A95" },
+  { id: "red", name: "Red", hex: "#E5484D", muted: "#B86B66" },
+  { id: "orange", name: "Orange", hex: "#F0812A", muted: "#C48A5E" },
+  { id: "yellow", name: "Yellow", hex: "#D9A21B", muted: "#B89A55" },
+  { id: "green", name: "Green", hex: "#2E9E5B", muted: "#6E9A7A" },
+  { id: "teal", name: "Teal", hex: "#0E9AA7", muted: "#5F8F96" },
 ];
 
 const DEFAULT_SUBJECT = "#3D5AFE";
+
+/** The muted color the page draws for a stored subject color (a color off the palette is kept). */
+function mutedSubject(hex) {
+  const h = /^#[0-9a-fA-F]{6}$/.test(hex || "") ? hex.toUpperCase() : DEFAULT_SUBJECT;
+  return SUBJECT_COLORS.find((c) => c.hex === h)?.muted || h;
+}
 
 /** Watch-out is always this red, whatever the subject color. */
 const WATCH_OUT_RED = "#E0362C";
@@ -62,18 +70,16 @@ const ensure = (color, bg, min, toward) => {
 function deriveTheme(subjectHex, mode) {
   const dark = mode === "dark";
   const n = NEUTRALS[mode];
-  const subject = /^#[0-9a-fA-F]{6}$/.test(subjectHex) ? subjectHex.toUpperCase() : DEFAULT_SUBJECT;
-  const isDefault = subject === DEFAULT_SUBJECT;
+  const subject = mutedSubject(subjectHex);
 
-  // Soft tint. Blue uses hand-picked values; every other subject is mixed.
-  const soft = dark
-    ? (isDefault ? "#07102D" : mix(subject, "#000000", 0.17))
-    : (isDefault ? "#D2DCFF" : mix(subject, "#FFFFFF", 0.22));
+  // Soft tint.
+  const soft = dark ? mix(subject, "#000000", 0.17) : mix(subject, "#FFFFFF", 0.22);
 
   // "Soft tone": the subject pulled toward the page, then pushed back until readable.
   const mid = dark ? mix(subject, "#000000", 0.5) : mix(subject, "#FFFFFF", 0.55);
   const softText = ensure(mid, soft, 4.5, n.text);
-  const graphic = dark ? mix(subject, "#FFFFFF", 0.45) : mid;
+  // Dots and bars. The muted colors are already mid-tone, so light mode draws them as they are.
+  const graphic = dark ? mix(subject, "#FFFFFF", 0.45) : subject;
   const softRing = dark ? mix(softText, soft, 0.55) : "transparent";
 
   let accentText = ensure(mid, n.page, 4.5, n.text);

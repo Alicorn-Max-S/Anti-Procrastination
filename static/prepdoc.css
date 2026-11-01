@@ -336,10 +336,11 @@ a.pd-file:hover .name { text-decoration-color: var(--pd-text); }
 .pd-list-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 24px; border-bottom: 1px solid var(--pd-line); }
 .pd-list li { border-bottom: 1px solid var(--pd-line); }
 .pd-list a {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px 16px;
+  justify-content: space-between;
+  gap: 10px 24px;
   padding: 18px 12px;
   margin: 0 -12px;
   border-radius: 8px;
@@ -348,13 +349,22 @@ a.pd-file:hover .name { text-decoration-color: var(--pd-text); }
   transition: background-color 120ms ease-out;
 }
 .pd-list a:hover { background: var(--pd-tile); }
-.pd-list .info { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pd-list .info { flex: 999 1 360px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pd-list .course { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--pd-text2); }
 .pd-list .name { font-size: 22px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
 .pd-list .first { font-size: 16px; line-height: 23px; color: var(--pd-text2); }
-.pd-list .flag { font-size: 14px; font-weight: 600; color: var(--pd-text); }
-.pd-list .go { display: inline-flex; align-items: center; gap: 6px; color: var(--pd-accent-text); font-size: 14px; font-weight: 600; }
+.pd-list .flag, .pd-list .watch { display: flex; align-items: flex-start; gap: 6px; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--pd-warn-text); }
+.pd-list .watch svg { flex: none; margin-top: 2px; }
+/* Tag over the due date, with the chevron beside both. */
+.pd-list .meta { flex: 1 1 180px; display: grid; grid-template-columns: auto 18px; justify-content: end; justify-items: end; align-items: center; gap: 8px 12px; color: var(--pd-text2); }
+.pd-list .meta svg { grid-column: 2; grid-row: 1 / span 2; }
+.pd-list .when { font-size: 15px; font-weight: 600; color: var(--pd-text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pd-list-type { padding: 4px 8px; border-radius: 4px; background: var(--pd-soft); color: var(--pd-soft-text); font-size: 12px; line-height: 14px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .pd-list li.done .name, .pd-list li.done .first { color: var(--pd-muted); }
-.pd-list-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; vertical-align: 1px; }
+.pd-list-dot { display: inline-block; flex: none; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; }
+/* To do / Done: a plain two-way switch, white on grey, no class color. */
+.pd-list-head .pd-switch button[aria-pressed="true"] { background: var(--pd-page); color: var(--pd-text); box-shadow: 0 1px 2px rgba(20, 20, 20, 0.12); }
+.pd-list-head .pd-switch button[aria-pressed="true"]:hover { background: var(--pd-page); }
 
 /* ---- class color picker ---- */
 .pd-swatches { display: flex; flex-wrap: wrap; gap: 0; }
@@ -420,4 +430,8 @@ body.pd-focus-open { overflow: hidden; }
   .pd-hero.timer { flex-direction: column; align-items: stretch; }
   .pd-timer-right { max-width: none; flex-basis: auto; }
   .pd-built .pd-btn { margin-left: 0; }
+  /* the list: To do / Done stays compact; tag and due date share one line under the name */
+  .pd-list-head .pd-switch { order: 0; flex: none; }
+  .pd-list .meta { display: flex; justify-content: flex-start; gap: 12px; }
+  .pd-list .meta svg { margin-left: auto; }
 }

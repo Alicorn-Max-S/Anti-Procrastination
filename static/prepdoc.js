@@ -18,6 +18,7 @@ const PD_QUICK_MINUTES = 10; // scheduler.QUICK_MINUTES
 
 let pdOpen = null; // the assignment whose prep doc is showing, or null for the list
 let pdLastKey = "";
+let pdListView = "todo"; // the list shows "todo" (not done yet) or "done"
 const pdMem = new Map(); // per assignment, this visit only: practice question, typed answer, regenerating
 
 // ---- small pieces ------------------------------------------------------------------------------
@@ -25,6 +26,7 @@ const pdMem = new Map(); // per assignment, this visit only: practice question, 
 const PD_ICONS = {
   "arrow-left": '<path d="M19 12H5"/><path d="m11 6-6 6 6 6"/>',
   "arrow-right": '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
+  "chevron-right": '<path d="m9 6 6 6-6 6"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
   "triangle-alert": '<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4"/><path d="M12 17h.01"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
@@ -117,12 +119,22 @@ function pdSetMode(pick) {
   pdApplyMode();
   pdRender(true);
   pdRenderFocus();
+  pdRepaintShell();
 }
 
 pdDarkQuery.addEventListener("change", () => {
   pdRender(true);
   pdRenderFocus();
+  pdRepaintShell();
 });
+
+// The check-in box and the week's blocks carry class colors too (app.js); redraw them when a color
+// or the mode changes.
+function pdRepaintShell() {
+  if (typeof state === "undefined" || !state) return;
+  renderCheckin();
+  renderWeek();
+}
 
 function pdPaint(node, hex) {
   for (const [k, v] of Object.entries(themeToCssVars(deriveTheme(hex || DEFAULT_SUBJECT, pdMode())))) node.style.setProperty(k, v);
@@ -143,7 +155,7 @@ function pdSwatches(course) {
     b.setAttribute("aria-label", c.name);
     b.title = c.name;
     const dot = el("span");
-    dot.style.background = c.hex;
+    dot.style.background = c.muted;
     b.append(dot);
     b.addEventListener("click", () => pdSetColor(course.id, c.hex));
     group.append(b);
@@ -159,6 +171,7 @@ async function pdSetColor(courseId, hex) {
     pdRender(true);
     pdRenderFocus();
     renderNotesSettings();
+    pdRepaintShell();
   } catch (e) {
     toast(e.message);
   }
@@ -321,11 +334,27 @@ function pdRender(force = false) {
   const root = $("#cards");
   if (!root) return;
   const card = pdOpen !== null ? cards.find((c) => c.assignment_id === pdOpen) : null;
-  const key = JSON.stringify([pdOpen, pdMode(), card || cards, card ? pdTemplate(card) : ""]);
+  const key = JSON.stringify([pdOpen, pdMode(), card || cards, card ? pdTemplate(card) : pdListView]);
   if (!force && key === pdLastKey) return;
   pdLastKey = key;
   const asking = notesAskIds();
   root.replaceChildren(card ? pdDoc(card, asking.has(card.assignment_id)) : pdList());
+}
+
+// To do / Done: plain words, one shown at a time.
+function pdListSwitch(todo, done) {
+  const group = el("div", "pd-switch");
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", "Show");
+  for (const [view, text] of [["todo", `To do · ${todo}`], ["done", `Done · ${done}`]]) {
+    const b = button(text, null, () => {
+      pdListView = view;
+      pdRender(true);
+    });
+    b.setAttribute("aria-pressed", String(pdListView === view));
+    group.append(b);
+  }
+  return group;
 }
 
 function pdList() {
@@ -333,8 +362,18 @@ function pdList() {
   pdPaint(root, DEFAULT_SUBJECT);
   const wrap = el("div", "pd-wrap");
   const head = el("header", "pd-list-head");
-  head.append(el("h1", "pd-h1", "Assignments"));
+  const todo = cards.filter((c) => !c.done);
+  const done = cards.filter((c) => c.done);
+  const title = el("div", "pd-title");
+  title.append(el("h1", "pd-h1", "Assignments"));
+  if (cards.length) title.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? `${todo.length} to do` : `${done.length} done`));
+  head.append(title);
+  if (cards.length) head.append(pdListSwitch(todo.length, done.length));
   wrap.append(head);
+  const shown = pdListView === "todo" ? todo : done;
+  if (cards.length && !shown.length) {
+    wrap.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? "Nothing left to do. Nice." : "Nothing marked done yet."));
+  }
   if (!cards.length) {
     wrap.append(
       el(
@@ -349,31 +388,39 @@ function pdList() {
     return root;
   }
   const ul = el("ul", "pd-list");
-  for (const c of cards) {
+  for (const c of shown) {
     const li = el("li", c.done ? "done" : "");
     const a = el("a");
     a.href = `#/prep/${c.assignment_id}`;
     a.id = `card-${c.assignment_id}`;
     const info = el("div", "info");
-    const kicker = el("p", "pd-kicker");
+    const course = el("p", "course");
     const dot = el("span", "pd-list-dot");
     dot.style.background = pdGraphic(c.color);
     dot.setAttribute("aria-hidden", "true");
-    kicker.append(dot, document.createTextNode([c.course, PD_KIND_NAMES[c.kind], c.done ? "Done" : dueText(c.due_at)].filter(Boolean).join(" · ")));
+    course.append(dot, document.createTextNode(c.course || "No class"));
     const steps = pdSteps(c);
     const cur = pdCurrent(steps, pdChecked(c));
-    info.append(kicker, el("p", "name", c.name || `Assignment ${c.assignment_id}`));
+    info.append(course, el("p", "name", c.name || `Assignment ${c.assignment_id}`));
     const first = c.quick ? `Quick task: ${c.first_step}` : cur < 0 ? "All steps done. Turn it in." : `${cur === 0 ? "Start here" : `Step ${cur + 1}`}: ${steps[cur].text}`;
     if (!c.done) info.append(el("p", "first", first));
     if (!c.done && c.past_due) info.append(el("p", "flag", `Past due since ${fmtDayTime(new Date(c.due_at))}`));
     else if (!c.done && c.missed) info.append(el("p", "flag", `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`));
-    const go = el("span", "go", "Open");
-    go.append(pdIcon("arrow-right", 16, 2.2));
-    a.append(info, go);
+    else if (!c.done && c.watch_out) {
+      const w = el("p", "watch");
+      w.append(pdIcon("triangle-alert", 15, 2.2), el("span", null, `Watch out: ${c.watch_out}`));
+      info.append(w);
+    }
+    // The type tag takes the class's tint, like its prep doc.
+    const meta = el("span", "meta");
+    const tag = el("span", "pd-list-type", c.quick ? "Quick task" : PD_KIND_NAMES[c.kind] || "Assignment");
+    pdPaint(tag, c.color);
+    meta.append(tag, el("span", "when", c.done ? "Done" : dueText(c.due_at)), pdIcon("chevron-right", 18, 2));
+    a.append(info, meta);
     li.append(a);
     ul.append(li);
   }
-  wrap.append(ul);
+  if (shown.length) wrap.append(ul);
   // Class colors, for the classes on this list.
   const seen = new Map();
   cards.forEach((c) => c.course_id && !seen.has(c.course_id) && seen.set(c.course_id, { id: c.course_id, name: c.course, color: c.color }));

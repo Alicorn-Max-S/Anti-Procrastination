@@ -261,7 +261,8 @@ function renderCheckin() {
   document.querySelectorAll("button[data-in15]").forEach((btn) => (btn.textContent = in15));
   const key = [
     notifyPermission(),
-    ...state.checkin.map((b) => `${b.id}:${b.status}:${b.replacement?.start ?? ""}:${(b.choices || []).map((c) => (c.key === "in_15" ? c.key : c.start)).join("|")}`),
+    pdMode(),
+    ...state.checkin.map((b) => `${b.id}:${b.status}:${classColor(b.assignment_id)}:${b.replacement?.start ?? ""}:${(b.choices || []).map((c) => (c.key === "in_15" ? c.key : c.start)).join("|")}`),
   ].join(",");
   if (key === renderedKeys.checkin) return; // don't wipe a time the student is typing
   renderedKeys.checkin = key;
@@ -365,14 +366,28 @@ function previewText(r) {
   return parts.join(" ");
 }
 
+// The "do this now" box, tinted in the class's color: a tag, the class, the assignment, then the
+// first step (a ping) or when it was planned (a miss), and the buttons.
 function checkinBox(b) {
   const missed = b.status === "missed";
   const box = el("div", `checkin${missed ? " missed" : ""}`);
   box.id = `checkin-${b.id}`;
-  if (missed) box.append(el("h2", null, `You missed ${b.name} (planned ${fmtDayTime(new Date(b.start))}). When will you start?`));
+  pdPaint(box, classColor(b.assignment_id));
+  box.append(el("span", "checkin-tag", missed ? "Missed start" : "Time to start"));
+  const meta = [b.course, PD_KIND_NAMES[b.kind]].filter(Boolean).join(" · ");
+  if (meta) {
+    const course = el("p", "checkin-course");
+    const dot = el("span", "dot");
+    dot.setAttribute("aria-hidden", "true");
+    course.append(dot, document.createTextNode(meta));
+    box.append(course);
+  }
+  box.append(el("h2", null, b.name));
+  if (missed) box.append(el("p", "when", `Planned for ${fmtDayTime(new Date(b.start))}. When will you start?`));
   else {
-    box.append(el("h2", null, `Time to start: ${b.name}`));
-    box.append(el("p", null, b.first_step ? `First step: ${b.first_step}` : "Open the prep card for your first step."));
+    const first = el("div", "first");
+    first.append(el("span", "first-label", "First step"), el("p", null, b.first_step || "Open the prep card for your first step."));
+    box.append(first);
     if (b.habit) box.append(el("p", "muted", b.habit));
   }
   box.append(...startButtons(b));
@@ -457,7 +472,8 @@ async function answer(blockId, ans, pickedTime) {
 function renderWeek() {
   const key = JSON.stringify([
     state.week_start,
-    state.blocks.map((b) => [b.id, b.start, b.status, b.at_risk]),
+    pdMode(),
+    state.blocks.map((b) => [b.id, b.start, b.status, b.at_risk, classColor(b.assignment_id)]),
     state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note]),
   ]);
   if (key === renderedKeys.week) return;
@@ -484,14 +500,27 @@ function renderWeek() {
   movedIds = new Set(); // animate a reflow once, not on every poll
 }
 
+const BLOCK_STATUS = { pinged: "Now", started: "Started", done: "✓ Done", missed: "Missed" };
+
+// One block: time, name, its class (dot in the class color), and its status. The one happening now
+// is tinted in the class color.
 function blockEl(b) {
   const classes = ["block", b.status];
   if (b.at_risk) classes.push("risk");
   if (movedIds.has(b.id)) classes.push("moved");
   const n = el("div", classes.join(" "));
+  pdPaint(n, classColor(b.assignment_id));
   n.append(el("div", "t", `${fmtTime(new Date(b.start))}–${fmtTime(new Date(b.end))}`), el("div", "n", b.name));
-  const meta = [b.course, b.status !== "planned" ? b.status : "", b.at_risk ? "ends after due date" : ""].filter(Boolean);
-  if (meta.length) n.append(el("div", "muted", meta.join(" · ")));
+  if (b.course) {
+    const c = el("div", "c");
+    const dot = el("span", "dot");
+    dot.setAttribute("aria-hidden", "true");
+    c.append(dot, document.createTextNode(b.course));
+    n.append(c);
+  }
+  if (BLOCK_STATUS[b.status]) n.append(el("div", "s", BLOCK_STATUS[b.status]));
+  else if (b.status !== "planned") n.append(el("div", "s", label(b.status)));
+  if (b.at_risk) n.append(el("div", "s risk-note", "Ends after it's due"));
   n.title = b.first_step || b.name;
   n.addEventListener("click", () => openDoc(b.assignment_id));
   return n;
@@ -666,7 +695,15 @@ async function loadCards() {
   }
   renderCards();
   renderNotesSettings(); // the Dashboard may have drawn its course list before the cards came in
+  if (state) {
+    // the check-in and week take their class colors from the cards, which come after the first poll
+    renderCheckin();
+    renderWeek();
+  }
 }
+
+// A block's class color, from its card (the server stores one of theme.js's 8; null draws the default).
+const classColor = (assignmentId) => cards.find((c) => c.assignment_id === assignmentId)?.color || null;
 
 // The Cards tab is the assignment list or one prep doc (prepdoc.js).
 function renderCards() {
@@ -1026,6 +1063,8 @@ function renderGrid(grid) {
     root.replaceChildren(el("p", "empty", "No graded tests for this course yet. Add a photo below."));
     return;
   }
+  // The table takes the course's color: each cell mixes it into the page, darker where more is lost.
+  pdPaint($("#marks-panel"), courses.find((c) => String(c.id) === $("#course-select").value)?.color);
   const byKey = new Map(grid.cells.map((c) => [`${c.topic}|${c.qtype}`, c]));
   const table = el("table");
   const head = el("tr");
@@ -1040,8 +1079,10 @@ function renderGrid(grid) {
       if (c) {
         const pct = Math.round(c.fraction * 100);
         td.append(document.createTextNode(`${pct}% lost`), el("small", null, `${num(c.lost)}/${num(c.possible)} marks · ${c.count} q`));
-        td.style.background = `color-mix(in srgb, var(--accent) ${Math.max(6, pct)}%, transparent)`;
-        if (pct >= 50) td.classList.add("hot");
+        // 0% lost is a faint tint, 60% or more the full color; past 75% of the color the text flips.
+        const strength = Math.min(100, Math.max(8, Math.round(pct * 1.6)));
+        td.style.background = `color-mix(in srgb, var(--pd-soft-text) ${strength}%, var(--pd-page))`;
+        if (strength >= 75) td.classList.add("hot");
       } else td.textContent = "–";
       tr.append(td);
     }

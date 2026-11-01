@@ -16,29 +16,10 @@
     <link rel="stylesheet" href="/static/prepdoc.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">
-        <img src="/static/icons/icon-192.png" alt="" width="28" height="28" />
-        <span>Start Helper</span>
-      </div>
-      <div class="top-actions">
-        <span id="sync-status" class="muted small"></span>
-        <button id="sync-btn" class="ghost" type="button">Sync</button>
-        <button id="notify-btn" class="ghost" type="button">Turn on notifications</button>
-      </div>
-    </header>
-
-    <section id="sync-panel" class="sync-panel" aria-live="polite" hidden>
-      <div class="sync-line">
-        <span id="sync-text"></span>
-        <button id="sync-dismiss" class="ghost small" type="button" hidden>Dismiss</button>
-      </div>
-      <div class="sync-track"><div id="sync-fill" class="sync-fill"></div></div>
-      <ul id="sync-failures" class="sync-failures"></ul>
-    </section>
-
+    <!-- The demo clock: a dark strip of its own, so it reads as a demo tool and not the app. -->
     <section class="clockbar" aria-label="Demo clock">
       <div class="clock-now">
+        <span class="clock-label">Demo clock</span>
         <span id="clock-time" class="clock-time">
           <span id="clock-day">--</span>
           <strong id="clock-hm">--</strong>
@@ -60,13 +41,35 @@
       <div id="clock-msg" class="clock-msg" role="status" hidden></div>
     </section>
 
-    <section id="checkin" class="checkin-list" aria-live="polite"></section>
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand">
+          <img src="/static/icons/icon-192.png" alt="" width="32" height="32" />
+          <span>Start Helper</span>
+        </div>
+        <nav class="tabs" role="tablist" aria-label="Pages">
+          <button role="tab" data-tab="cards" aria-selected="true">Assignments</button>
+          <button role="tab" data-tab="week" aria-selected="false">Week</button>
+          <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
+        </nav>
+      </div>
+      <div class="top-actions">
+        <span id="sync-status" class="muted small"></span>
+        <button id="sync-btn" type="button">Sync</button>
+        <button id="notify-btn" type="button">Turn on notifications</button>
+      </div>
+    </header>
 
-    <nav class="tabs" role="tablist">
-      <button role="tab" data-tab="cards" aria-selected="true">Assignments</button>
-      <button role="tab" data-tab="week" aria-selected="false">Week</button>
-      <button role="tab" data-tab="dashboard" aria-selected="false">Dashboard</button>
-    </nav>
+    <section id="sync-panel" class="sync-panel" aria-live="polite" hidden>
+      <div class="sync-line">
+        <span id="sync-text"></span>
+        <button id="sync-dismiss" class="ghost small" type="button" hidden>Dismiss</button>
+      </div>
+      <div class="sync-track"><div id="sync-fill" class="sync-fill"></div></div>
+      <ul id="sync-failures" class="sync-failures"></ul>
+    </section>
+
+    <section id="checkin" class="checkin-list" aria-live="polite"></section>
 
     <main>
       <section id="tab-cards" class="tab-panel">
@@ -74,6 +77,9 @@
       </section>
 
       <section id="tab-week" class="tab-panel" hidden>
+        <div class="page-head">
+          <h1>Week</h1>
+        </div>
         <div class="panel avail">
           <h3>When can you work?</h3>
           <p class="muted small">Say when you can't (or can) work and the week moves around it now, before a start is missed. "I can't work Tuesday after 5, soccer." "I'm free Saturday morning."</p>
@@ -103,32 +109,20 @@
       </section>
 
       <section id="tab-dashboard" class="tab-panel" hidden>
-        <div class="panel">
-          <h3>Your courses</h3>
-          <p class="muted small">Each course's color, used on all its prep docs, and where you keep notes for it. Cards say where once, in the step where you start writing; when it's not set, they don't say. A notes change rebuilds that course's cards on the next sync.</p>
-          <div id="notes-settings" class="notes-settings"></div>
-          <div class="notes-row mode-row">
-            <label for="mode-select">Prep docs: light or dark</label>
-            <select id="mode-select">
-              <option value="system">Same as the system</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </div>
+        <div class="page-head">
+          <h1>Dashboard</h1>
+          <p class="muted">What your graded work says, and how your starts are going.</p>
         </div>
-
-        <div class="panel">
-          <h3>Notifications and extension</h3>
-          <p class="muted small">Which devices get pings, and what the Chrome extension has fetched from your school Google account.</p>
-          <div id="connections" class="connections"></div>
-        </div>
-
-        <div class="panel">
-          <div class="row">
-            <label for="course-select">Course</label>
-            <select id="course-select"></select>
+        <div class="dash">
+        <div class="dash-main">
+        <div id="marks-panel" class="panel">
+          <div class="panel-head">
+            <h3>Where you lose marks</h3>
+            <div class="row">
+              <label for="course-select">Course</label>
+              <select id="course-select"></select>
+            </div>
           </div>
-          <h3>Where you lose marks</h3>
           <p class="muted small">Share of marks lost on graded tests, by topic and question type. Darker is weaker.</p>
           <div id="grid" class="grid-wrap"></div>
           <div id="weakest"></div>
@@ -153,11 +147,35 @@
           <h3>Feedback in this class</h3>
           <ul id="evidence" class="evidence"></ul>
         </div>
+        </div>
 
-        <div class="panel">
+        <div class="dash-side">
+        <div class="panel tile">
           <h3>Starting stats</h3>
           <div id="stats" class="stats"></div>
           <div id="weekdays"></div>
+        </div>
+
+        <div class="panel">
+          <h3>Your courses</h3>
+          <p class="muted small">Each course's color, used on all its prep docs, and where you keep notes for it. Cards say where once, in the step where you start writing; when it's not set, they don't say. A notes change rebuilds that course's cards on the next sync.</p>
+          <div id="notes-settings" class="notes-settings"></div>
+          <div class="notes-row mode-row">
+            <label for="mode-select">Light or dark</label>
+            <select id="mode-select">
+              <option value="system">Same as the system</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>Notifications and extension</h3>
+          <p class="muted small">Which devices get pings, and what the Chrome extension has fetched from your school Google account.</p>
+          <div id="connections" class="connections"></div>
+        </div>
+        </div>
         </div>
       </section>
     </main>

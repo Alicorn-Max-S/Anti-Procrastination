@@ -1,7 +1,7 @@
 // Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v6";
+const CACHE = "start-helper-v7";
 const SHELL = ["/", "/static/app.js", "/static/prepdoc.js", "/static/theme.js", "/static/style.css", "/static/prepdoc.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
 const ICON = "/static/icons/icon-192.png";
 
@@ -19,12 +19,13 @@ self.addEventListener("activate", (event) => {
 });
 
 // Network first for the shell (so edits show up right away), cache as the offline fallback.
-// API calls always go to the network.
+// "no-cache" makes the browser check with the server instead of reusing its own HTTP-cached copy,
+// which could pair a new page with an old stylesheet. API calls always go to the network.
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/")) return;
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: "no-cache" })
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
