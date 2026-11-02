@@ -70,7 +70,17 @@ class Req:
         self.body = body
         self.ids = body["prompt"]
         self.text = detok(self.ids)
-        block = self.text[self.text.rindex("Question: "):]
+        # A joint probe (decider/joint.py) ends "...\n<field>:" after the answer turn opens, and its
+        # question is the block under "[<field>]"; otherwise the question is the last one.
+        answer = self.text.rfind(ANSWER)
+        self.written = self.text[answer + len(ANSWER):] if answer >= 0 else ""
+        m = re.search(r"(\w+):$", self.written)
+        self.field = m.group(1) if m and f"[{m.group(1)}]\nQuestion: " in self.text else None
+        if self.field:
+            block = self.text[self.text.index(f"[{self.field}]\n") + len(self.field) + 3:]
+            block = re.split(r"\n\n(?:\[|Reply with one line)", block, maxsplit=1)[0]
+        else:
+            block = self.text[self.text.rindex("Question: "):]
         self.question = block.split("\n", 1)[0].removeprefix("Question: ")
         # letter -> label: an option line is "A) Label: its definition"
         self.options = dict(re.findall(r"^([A-Z])\) ([^:\n]+)", block, re.M))
@@ -417,6 +427,32 @@ def test_lines_file_and_skip_thinking(s, tmp_path):
     assert len(fake.kinds("think")) == 1  # only type thought
 
 
+def test_offsets_shift_the_fast_pass_and_temperatures_calibrate(s, tmp_path):
+    (tmp_path / "lines.json").write_text(json.dumps({"lines": {
+        "credit": {"fast": 0.85, "think": 0.99, "temperature": 2.0,
+                   "offsets": {"full": 1.5, "partial": 0.0, "none": -1.5, "cant_tell": 0.0}},
+        "format": {"fast": 0.85, "think": 0.85, "think_temperature": 3.0},
+    }}))
+    fake = FakeLlama(probe=by_question({
+        "What topic": sure("object pronouns"),
+        "What format": lambda r: sure("Fill in the blank") if r.think_n else UNSURE_FORMAT,
+        "How much credit": {"None": 0.6, "Full": 0.38},  # leans to None; the offsets turn it to Full
+    }), think=lambda r: (words(30) + [EOM], "eos"))
+    d = decider(fake, s).decide_test(TOPICS, QUESTIONS[:1])["decisions"]["1"]
+    credit = d["credit"]
+    assert credit["value"] == "full" and credit["tier"] == "instant" and credit["flipped"] is False
+    assert credit["confidence"] > 0.9  # the shifted probe's, which the line is on
+    assert credit["trace"][0]["probs"]["full"] > credit["trace"][0]["probs"]["none"]
+    assert 0.5 < credit["calibrated_confidence"] < credit["confidence"]  # temperature 2 softens it
+    fmt = d["format"]  # decided by a thinking probe, so at its think temperature
+    assert fmt["tier"] == "thought" and fmt["confidence"] == pytest.approx(1.0)
+    assert fmt["calibrated_confidence"] < 0.97
+    assert d["topic"]["calibrated_confidence"] == pytest.approx(1 / (1 + 2e-4))  # no temperature: just the floor
+
+
+UNSURE_FORMAT = {"Fill in the blank": 0.5, "Short answer": 0.45}
+
+
 def off_the_fast_answer(fast: dict, after: dict) -> callable:
     """Probes that say `fast` on the fast pass and `after` once thinking has started."""
     return lambda r: after if r.think_n else fast
@@ -460,8 +496,9 @@ def test_the_type_settles_the_template_for_tests_problem_sets_and_labs(s):
     fake = FakeLlama(probe=by_question({"What type": sure("Lab report"), "How much effort": sure("One solid session")}))
     d = decider(fake, s).decide_assignment(ASSIGNMENT)["decisions"]
     assert {k: v for k, v in d["template"].items() if k not in ("prompt_version", "model")} == {
-        "value": "dashboard", "option_index": 2, "confidence": 1.0, "letter_share": 1.0, "flipped": None,
-        "tier": "default", "think_tokens": 0, "probe_tokens": 0, "trace": [], "clarify": False}
+        "value": "dashboard", "option_index": 2, "confidence": 1.0, "calibrated_confidence": 1.0,
+        "letter_share": 1.0, "flipped": None, "tier": "default", "think_tokens": 0, "probe_tokens": 0,
+        "trace": [], "clarify": False}
     assert not [r for r in fake.kinds("probe") if r.question.startswith("Which prep")]
     fake = FakeLlama(probe=by_question({"What type": sure("Lab report"), "Which prep": sure("Checklist"),
                                         "How much effort": sure("One solid session")}))
@@ -487,6 +524,70 @@ def test_system_turn_identical_and_description_capped(s):
     assert systems == {"<|begin_of_text|><|start|>system<|message|>" + SYSTEM}
     assert "y" * DESCRIPTION_CHARS + "\n\nQuestion:" in fake.requests[0][1].text
     assert "y" * (DESCRIPTION_CHARS + 1) not in fake.requests[0][1].text
+
+
+# ---- joint mode: one prompt, one chain -----------------------------------------------------------
+
+
+def joint(s: Settings) -> Settings:
+    return replace(s, mode="joint", joint_lines_file=s.lines_file)
+
+
+def unsure_then(label: str, fast: dict) -> callable:
+    return lambda r: sure(label) if r.think_n else fast
+
+
+def test_joint_mode_thinks_once_for_every_unsure_field(s):
+    fake = FakeLlama(probe=by_question({
+        "What type": sure("Reading"),
+        "Which prep": unsure_then("Cornell", {"Cornell": 0.5, "Document": 0.45}),
+        "How much effort": unsure_then("Multi-day", {"Multi-day": 0.5, "One solid session": 0.45}),
+    }), think=lambda r: (words(40, "\n\n"), "word"))
+    out = decider(fake, joint(s)).decide_assignment(ASSIGNMENT)
+    d = out["decisions"]
+    assert {k: (v["value"], v["tier"]) for k, v in d.items()} == {
+        "type": ("reading", "instant"), "template": ("cornell", "thought"), "effort": ("multi_day", "thought")}
+    assert len(fake.kinds("think")) == 1  # one shared chain, cleared after its first paragraph
+    assert d["template"]["think_tokens"] == d["effort"]["think_tokens"] == 40
+    probes = fake.kinds("probe")
+    # forward round of 3, reversed probe for type (the only one that cleared), then 2 after thinking
+    assert [r.field for r in probes] == ["type", "template", "effort", "type", "template", "effort"]
+    # each probe writes the earlier answers in the reply form: Reading is C forward, F reversed
+    assert probes[1].written == "type: C\ntemplate:" and probes[3].written == "type:"
+    assert probes[5].written == "type: C\ntemplate: D\neffort:"  # Cornell, settled by thinking
+    assert all("[type]\nQuestion: What type" in r.text for r in probes)
+    assert d["effort"]["calibrated_confidence"] > 0 and out["timings"]["think_calls"] == 1
+
+
+def test_joint_mode_all_sure_is_one_round_each_way(s):
+    fake = FakeLlama(probe=by_question({"What type": sure("Reading"), "Which prep": sure("Document"),
+                                        "How much effort": sure("One solid session")}))
+    d = decider(fake, joint(s)).decide_assignment(ASSIGNMENT)["decisions"]
+    assert {v["tier"] for v in d.values()} == {"instant"} and d["template"]["flipped"] is False
+    assert len(fake.kinds("probe")) == 6 and not fake.kinds("think")
+
+
+def test_joint_mode_settles_the_template_from_the_type(s):
+    fake = FakeLlama(probe=by_question({"What type": sure("Lab report"), "Which prep": sure("Checklist"),
+                                        "How much effort": sure("One solid session")}))
+    d = decider(fake, joint(s)).decide_assignment(ASSIGNMENT)["decisions"]
+    assert (d["template"]["value"], d["template"]["tier"]) == ("dashboard", "default")
+    assert d["type"]["tier"] == d["effort"]["tier"] == "instant"
+
+
+def test_joint_mode_writes_a_fixed_type_and_never_asks_it(s):
+    fake = FakeLlama(probe=by_question({"Which prep": sure("Document"), "How much effort": sure("One solid session")}))
+    out = decider(fake, joint(s)).decide_assignment(ASSIGNMENT, ["template", "effort"], type_value="reading")
+    probes = fake.kinds("probe")
+    assert {r.field for r in probes} == {"template", "effort"}
+    # Reading's letter: C forward, F in the reversed round, where the type question is reversed too
+    assert [r.written.split("\n")[0] for r in probes] == ["type: C"] * 2 + ["type: F"] * 2
+    assert list(out["decisions"]) == ["template", "effort"]
+
+
+def test_unknown_mode_is_refused(s):
+    with pytest.raises(ValueError):
+        Decider(FakeLlama().client(s), replace(s, mode="together"))
 
 
 # ---- 6: topic naming -----------------------------------------------------------------------------
@@ -614,8 +715,9 @@ def test_api_decide_assignment(api):
     d = r.json()["decisions"]
     assert {k: v["value"] for k, v in d.items()} == {
         "type": "reading", "template": "document", "effort": "one_solid_session"}
-    assert set(d["type"]) == {"value", "option_index", "confidence", "letter_share", "flipped", "tier",
-                              "think_tokens", "probe_tokens", "trace", "prompt_version", "model", "clarify"}
+    assert set(d["type"]) == {"value", "option_index", "confidence", "calibrated_confidence", "letter_share",
+                              "flipped", "tier", "think_tokens", "probe_tokens", "trace", "prompt_version",
+                              "model", "clarify"}
     assert client.post("/decide/assignment", json={"assignment": ASSIGNMENT, "fields": ["nope"]}).status_code == 422
 
 

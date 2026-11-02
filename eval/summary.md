@@ -8,19 +8,21 @@ Run Nov 01, 2026 on the labeled set: 197 assignments and 51 test questions, 723 
 | Base Glimmer (248 items) | 87.6% | 90.0% | 82.6% | 9.31 | $2.85 |
 | System One, fast pass only (248 items) | 83.0% | 85.9% | 77.3% | 1.04 | $0.32 |
 | System One, full (248 items) | 86.6% | 91.3% | 77.3% | 6.83 | $2.09 |
+| Liquid d1-2B (248 items) | 74.7% | 81.3% | 61.6% | 0.14 | $0.044 |
 
 ## Accuracy by field
 
-| Field | Cost | All Spark | Base Glimmer | System One, fast pass only | System One, full |
-|---|---|---|---|---|---|
-| type (189) | expensive | 92.1% | 92.6% | 87.3% | 92.1% |
-| template (190) | expensive | 89.5% | 87.4% | 84.7% | 86.8% |
-| effort (191) | cheap | 78.0% | 79.1% | 72.3% | 72.3% |
-| format (51) | cheap | 98.0% | 96.1% | 96.1% | 96.1% |
-| topic (51) | expensive | 98.0% | 100.0% | 96.1% | 98.0% |
-| credit (51) | expensive | 96.1% | 80.4% | 74.5% | 98.0% |
+| Field | Cost | All Spark | Base Glimmer | System One, fast pass only | System One, full | Liquid d1-2B |
+|---|---|---|---|---|---|---|
+| type (189) | expensive | 92.1% | 92.6% | 87.3% | 92.1% | 83.1% |
+| template (190) | expensive | 89.5% | 87.4% | 84.7% | 86.8% | 76.8% |
+| effort (191) | cheap | 78.0% | 79.1% | 72.3% | 72.3% | 60.2% |
+| effort, within one level | cheap | 96.9% | 97.4% | 96.3% | 96.3% | 91.1% |
+| format (51) | cheap | 98.0% | 96.1% | 96.1% | 96.1% | 66.7% |
+| topic (51) | expensive | 98.0% | 100.0% | 96.1% | 98.0% | 100.0% |
+| credit (51) | expensive | 96.1% | 80.4% | 74.5% | 98.0% | 72.5% |
 
-## System One tiers
+## System One, full: tiers
 
 | Field | Instant | Thought | Guessed | From the type | Thinking loops | Hit the cap | To clarify (wrong) |
 |---|---|---|---|---|---|---|---|
@@ -40,4 +42,6 @@ Lines: `decisions/lines.json` = `{"lines": {"type": {"fast": 0.9987, "think": 1.
 - Spark's cost is the `usage` the API returned: 589,742 input tokens (148,389 cached) and 392,690 output tokens (386,817 of them reasoning, at Spark's default effort) over 248 calls, at $1.25, $0.15 and $4.25 per million (Standard mode): $2.24 in all.
 - Glimmer's cost prices GPU seconds at $1.10 an hour (Modal's A10, as a rental proxy). On Max's own card the real cost is electricity.
 - Base Glimmer: 0 answers couldn't be read from its reply and count as wrong; 0 replies hit the 4096-token limit.
+- Liquid d1-2B answers every field of an item in one `/v1/systemone` call, each a choice question whose instructions hold the field's question, rules and worked examples, with each option a criterion. Its GPU seconds are priced like Glimmer's. 0 answers weren't one of the options and count as wrong.
+- Within one level: effort's options run from one short sitting to multi-day, so an answer one size off the label counts there.
 - Skipped labels: 21 (used as a prompt example).

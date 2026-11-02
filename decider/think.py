@@ -4,8 +4,12 @@ the probe clears the think line, Glimmer closes its thinking, or the cap is reac
 A paragraph is generated up to "\\n\\n" or PARAGRAPH_MAX tokens. A paragraph under MIN_PROBE_CHUNK
 tokens gets another chunk before it is probed. A new paragraph starts only while the thinking is
 under CAP_TOKENS; the one in progress always finishes. It never stops because probes agree.
+
+`chain` is the paragraph loop alone, with whatever probing comes after each paragraph: one field's
+probe here, a probe per field in joint mode (decider/joint.py).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .config import Settings
@@ -58,20 +62,35 @@ def _chunk(llama: Llama, prompt: Prompt, thought: list[int], s: Settings, slot: 
     return ids, False
 
 
+def chain(llama: Llama, prompt, s: Settings, slot: int, seed: int | None,
+          after: Callable[[list[int]], bool]) -> tuple[list[int], bool]:
+    """Thinks on `prompt` (anything with .thinking(thought)) a paragraph at a time; after each
+    paragraph, after(thinking so far) probes and says whether to stop. Returns (the thinking,
+    whether Glimmer ended it)."""
+    tokens: list[int] = []
+    finished = False
+    while len(tokens) < s.cap_tokens:  # a new paragraph starts only under the cap
+        paragraph: list[int] = []
+        while True:  # the paragraph in progress always finishes
+            ids, finished = _chunk(llama, prompt, tokens + paragraph, s, slot, seed)
+            paragraph += ids
+            if finished or len(paragraph) >= s.min_probe_chunk:
+                break
+        tokens += paragraph
+        if after(tokens) or finished:
+            break
+    return tokens, finished
+
+
 def think(llama: Llama, prompt: Prompt, choice: Choice, line: float, s: Settings, slot: int = 0,
           seed: int | None = None) -> Thought:
     t = Thought()
-    while len(t.tokens) < s.cap_tokens:  # a new paragraph starts only under the cap
-        paragraph: list[int] = []
-        while True:  # the paragraph in progress always finishes
-            ids, t.finished = _chunk(llama, prompt, t.tokens + paragraph, s, slot, seed)
-            paragraph += ids
-            if t.finished or len(paragraph) >= s.min_probe_chunk:
-                break
-        t.tokens += paragraph
-        p = probe(llama, prompt.answer(t.tokens), choice, slot)
-        t.trace.append((len(t.tokens), p))
+
+    def after(tokens: list[int]) -> bool:
+        p = probe(llama, prompt.answer(tokens), choice, slot)
+        t.trace.append((len(tokens), p))
         t.clear = clears(p, line, s.letter_share_min)
-        if t.clear or t.finished:
-            break
+        return t.clear
+
+    t.tokens, t.finished = chain(llama, prompt, s, slot, seed, after)
     return t

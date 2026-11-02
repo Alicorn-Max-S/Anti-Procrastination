@@ -10,6 +10,13 @@ field in skip_thinking; `default` for a template the type settles (prompts.TEMPL
 `clarify` marks what goes on the student's clarify list: a guessed type or template. A guessed
 effort only gets the badge, and topic and credit keep thinking's answer (when it disagrees with the
 fast pass on credit, thinking is right 7 times in 9).
+
+`calibrated_confidence` is the decision's chance of being right: its last probe at the field's
+fitted temperature for that kind of probe, fast pass or thinking (decisions/lines.json).
+`confidence` stays the raw top share the lines are on.
+
+In joint mode (settings.mode, decider/joint.py) an assignment's fields share one prompt and one
+thinking chain instead of two stages; test questions are decided per field either way.
 """
 
 import threading
@@ -22,10 +29,11 @@ from typing import Callable
 
 from decisions.fields import ASSIGNMENT_FIELDS, QUESTION_FIELDS, Field, field_values
 
-from .config import Lines, Settings, load_lines
+from .config import MODES, Lines, Settings, load_lines
 from .gate import FastPass, fast_pass
+from .joint import JointPrompt, probe_round
 from .llama import Llama
-from .probe import Probe
+from .probe import Probe, calibrated, clears
 from .prompts import (
     MAX_TOPICS,
     TEMPLATE_FROM_TYPE,
@@ -39,7 +47,7 @@ from .prompts import (
     test_context,
     with_type,
 )
-from .think import Thought, think
+from .think import Thought, chain, think
 from .topics import name_topic, resolve
 
 
@@ -83,8 +91,14 @@ def _entry(think_tokens: int, p: Probe, choice: Choice) -> dict:
     }
 
 
+def values(choice: Choice) -> list[str]:
+    return [o.value for o in choice.options]
+
+
 class Decider:
     def __init__(self, llama: Llama, settings: Settings) -> None:
+        if settings.mode not in MODES:
+            raise ValueError(f"DECIDER_MODE {settings.mode!r}: choose from {MODES}")
         self.llama = llama
         self.s = settings
         self._lock = threading.Lock()  # one item at a time: interleaved items would thrash the cache
@@ -92,34 +106,41 @@ class Decider:
 
     # ---- one field ----------------------------------------------------------------------------
 
-    def _decision(self, job: Job, tier: str) -> dict:
-        fp = job.fast
-        entries = [(0, fp.forward, job.fast_choice)]
-        if job.thought:
-            entries += [(n, p, job.choice) for n, p in job.thought.trace]
+    def _made(self, f: Field, entries: list[tuple[int, Probe, Choice]], probes: list[Probe | None],
+              flipped: bool | None, tier: str, think_tokens: int, lines: Lines) -> dict:
+        """A Decision: its answer is the last entry's top option (the fast pass is entry 0)."""
         _, last, choice = entries[-1]
-        probes = [fp.forward, fp.reversed] + ([p for _, p in job.thought.trace] if job.thought else [])
         return {
             "value": choice.options[last.top].value,
             "option_index": last.top,
             "confidence": round(last.confidence, 6),
+            "calibrated_confidence": round(calibrated(last.probs, lines.temperature(f.key, len(entries) > 1)), 6),
             "letter_share": round(last.letter_share, 6),
-            "flipped": fp.flipped,
+            "flipped": flipped,
             "tier": tier,
-            "think_tokens": len(job.thought.tokens) if job.thought else 0,
+            "think_tokens": think_tokens,
             "probe_tokens": sum(p.probe_tokens for p in probes if p is not None),
             "trace": [_entry(n, p, c) for n, p, c in entries],
             "prompt_version": self.s.prompt_version,
             "model": self.llama.model(),
-            "clarify": tier == "guessed" and job.field.key in CLARIFY_FIELDS,
+            "clarify": tier == "guessed" and f.key in CLARIFY_FIELDS,
         }
+
+    def _decision(self, job: Job, tier: str, lines: Lines) -> dict:
+        fp = job.fast
+        entries = [(0, fp.forward, job.fast_choice)]
+        if job.thought:
+            entries += [(n, p, job.choice) for n, p in job.thought.trace]
+        probes = [fp.forward, fp.reversed] + ([p for _, p in job.thought.trace] if job.thought else [])
+        return self._made(job.field, entries, probes, fp.flipped, tier,
+                          len(job.thought.tokens) if job.thought else 0, lines)
 
     def _from_type(self, f: Field, value: str) -> dict:
         """A template the type settles: no question asked, so no probes and no trace."""
         return {
             "value": value, "option_index": field_values(f).index(value), "confidence": 1.0,
-            "letter_share": 1.0, "flipped": None, "tier": "default", "think_tokens": 0,
-            "probe_tokens": 0, "trace": [], "prompt_version": self.s.prompt_version,
+            "calibrated_confidence": 1.0, "letter_share": 1.0, "flipped": None, "tier": "default",
+            "think_tokens": 0, "probe_tokens": 0, "trace": [], "prompt_version": self.s.prompt_version,
             "model": self.llama.model(), "clarify": False,
         }
 
@@ -127,12 +148,13 @@ class Decider:
         """The fast pass. Returns the decision when no thinking is needed, else None."""
         job.fast_choice = job.choice
         job.fast = fast_pass(self.llama, job.context, job.choice, lines.fast(job.field.key),
-                             self.s.letter_share_min, self.s.fast_pass_format, slot)
+                             self.s.letter_share_min, self.s.fast_pass_format, slot,
+                             lines.offsets(job.field.key, values(job.choice)))
         job.prompt = job.fast.prompt
         if job.fast.instant:
-            return self._decision(job, "instant")
+            return self._decision(job, "instant", lines)
         if job.field.key in lines.skip_thinking:
-            return self._decision(job, "guessed")
+            return self._decision(job, "guessed", lines)
         return None
 
     def _think(self, job: Job, lines: Lines, slot: int, seed: int | None) -> dict:
@@ -141,7 +163,7 @@ class Decider:
         t = job.thought
         fast = job.fast_choice.options[job.fast.forward.top].value
         agrees = t.finished and job.choice.options[t.last.top].value == fast
-        return self._decision(job, "thought" if t.clear or agrees else "guessed")
+        return self._decision(job, "thought" if t.clear or agrees else "guessed", lines)
 
     def _loops(self, jobs: list[Job], run: Callable[[Job, int], None]) -> None:
         if self.s.parallel_slots <= 1 or len(jobs) <= 1:
@@ -184,6 +206,8 @@ class Decider:
         wanted = pick_fields(ASSIGNMENT_FIELDS, fields)
         if type_value is not None and type_value not in field_values(FIELD_BY_KEY["type"]):
             raise UnknownField(f"unknown type {type_value!r}; choose from {field_values(FIELD_BY_KEY['type'])}")
+        if self.s.mode == "joint":
+            return self._decide_joint(assignment, wanted, seed, type_value)
         later = [f for f in wanted if f.key in USES_TYPE]
         need_type = type_value is None and (FIELD_BY_KEY["type"] in wanted or bool(later))
         first = [FIELD_BY_KEY["type"]] if need_type else []
@@ -216,6 +240,92 @@ class Decider:
                 stage(later, with_type(context, t))
             return {
                 "decisions": {f.key: decisions[f.key] for f in wanted if f.key in decisions},
+                "timings": self._timings(start, before),
+            }
+
+    def _decide_joint(self, assignment: dict, wanted: list[Field], seed: int | None,
+                      type_value: str | None) -> dict:
+        """Joint mode: a forward round of probes (every field, each seeing the earlier fields' top
+        answers), a reversed round for the fields that clear their fast line, then one thinking
+        chain for every field still unsure, probing those after each paragraph until each clears
+        its think line. Tiers and clarify mean what they do per field. Every field is decided;
+        `wanted` only picks what's returned."""
+        with self._lock:
+            start, before = time.perf_counter(), Counter(self.llama.counts)
+            lines = load_lines(self.s.joint_lines_file)
+            share = self.s.letter_share_min
+            choices = [choice_for(f) for f in ASSIGNMENT_FIELDS]
+            by_key = {c.field: c for c in choices}
+            prompt = JointPrompt(self.llama, assignment_context(assignment), choices, self.s.fast_pass_format)
+            offsets = {c.field: lines.offsets(c.field, values(c)) for c in choices}
+            written: dict[str, str] = {} if type_value is None else {"type": type_value}
+            asked = [c.field for c in choices if c.field not in written]
+
+            def top(f: str, p: Probe) -> str:
+                return by_key[f].options[p.top].value
+
+            def settles(type_now: str | None) -> bool:
+                return self.s.template_from_type and type_now in TEMPLATE_FROM_TYPE
+
+            forward = probe_round(self.llama, prompt, [], written, set(asked), offsets=offsets)
+            fast = {f: top(f, p) for f, p in forward.items()}
+            passed = {f for f, p in forward.items() if clears(p, lines.fast(f), share)}
+            back = {}
+            if passed:
+                unsure = {f: v for f, v in fast.items() if f not in passed}
+                back = probe_round(self.llama, prompt.reversed(), [], written | unsure, passed, offsets=offsets)
+            tiers: dict[str, str] = {}
+            for f in asked:
+                b = back.get(f)
+                if b is not None and b.top == forward[f].top and b.letter_share >= share:
+                    tiers[f] = "instant"
+                elif f in lines.skip_thinking:
+                    tiers[f] = "guessed"
+                if f in tiers:
+                    written[f] = fast[f]
+            if "template" in asked and settles(written.get("type")):
+                tiers["template"] = "default"
+                written["template"] = TEMPLATE_FROM_TYPE[written["type"]]
+
+            need = [f for f in asked if f not in tiers]
+            traces: dict[str, list[tuple[int, Probe]]] = {f: [] for f in need}
+            cleared: dict[str, int] = {}  # field -> thinking tokens when its probe cleared the line
+            probing = set(need)
+
+            def after(tokens: list[int]) -> bool:
+                round_ = probe_round(self.llama, prompt, tokens, written, probing)
+                for f, p in round_.items():
+                    traces[f].append((len(tokens), p))
+                    if clears(p, lines.think(f), share):
+                        cleared[f] = len(tokens)
+                        written[f] = top(f, p)
+                        probing.discard(f)
+                type_now = written.get("type") or (top("type", round_["type"]) if "type" in round_ else None)
+                # a template the type settles needn't clear (it's still probed, in case the type moves)
+                return not [f for f in probing if not (f == "template" and settles(type_now))]
+
+            tokens, finished = chain(self.llama, prompt, self.s, 0, seed, after) if need else ([], False)
+            out: dict[str, dict] = {}
+            for f in asked:
+                c = by_key[f]
+                if f in need:
+                    if f in cleared:
+                        tiers[f] = "thought"
+                    else:
+                        agrees = finished and top(f, traces[f][-1][1]) == fast[f]
+                        tiers[f] = "thought" if agrees else "guessed"
+                if tiers[f] == "default":
+                    continue
+                entries = [(0, forward[f], c)] + [(n, p, c) for n, p in traces.get(f, [])]
+                probes = [forward[f], back.get(f)] + [p for _, p in traces.get(f, [])]
+                flipped = None if f not in back else back[f].top != forward[f].top
+                think_tokens = cleared.get(f, len(tokens)) if f in need else 0
+                out[f] = self._made(FIELD_BY_KEY[f], entries, probes, flipped, tiers[f], think_tokens, lines)
+            final_type = type_value or out["type"]["value"]
+            if "template" in asked and settles(final_type):
+                out["template"] = self._from_type(FIELD_BY_KEY["template"], TEMPLATE_FROM_TYPE[final_type])
+            return {
+                "decisions": {f.key: out[f.key] for f in wanted if f.key in out},
                 "timings": self._timings(start, before),
             }
 

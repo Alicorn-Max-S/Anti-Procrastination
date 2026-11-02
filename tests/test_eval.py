@@ -95,7 +95,17 @@ def test_cheap_line_allows_ten_percent_and_skip_needs_ten_percent_fast_error():
     assert p.skip and p.fast_error == pytest.approx(0.1)
     worse = recs + [rec(2, probe(0.61, 0))]
     assert not cal.plan_field("format", worse, 0.5).skip
-    assert cal.plan_field("effort", worse, 0.5).skip  # SKIP_THINKING, set by hand
+
+
+def test_hand_set_lines_and_skips(monkeypatch):
+    recs = [rec(0, probe(0.6 + i / 100)) for i in range(18)] + [rec(1, probe(0.65, 0)), rec(1, probe(0.62, 0))]
+    effort = cal.plan_field("effort", recs, 0.5)  # FAST_LINES: thinks under 0.8, so never skips
+    assert effort.fast == cal.FAST_LINES["effort"] == 0.8 and effort.fast_fixed and not effort.skip
+    assert effort.fast_rule == 0.6  # what the 10% rule would give, for the report
+    worse = recs + [rec(2, probe(0.61, 0))]
+    assert not cal.plan_field("format", worse, 0.5).skip
+    monkeypatch.setattr(cal, "SKIP_THINKING", {"format"})
+    assert cal.plan_field("format", worse, 0.5).skip  # over 10% fast error, skipped by hand
 
 
 def test_no_zero_error_line_means_never():
@@ -139,7 +149,7 @@ def test_report_scores_a_template_the_type_settles_as_its_default(monkeypatch):
     items = [Item("assignment", f"assignment:{k}", "Chem", {}, {"type": t, "template": m}) for k, (t, m) in labels.items()]
     recs = {(i.key, "type"): assignment_rec(i.key, TYPE, i.labels["type"]) for i in items}
     recs[("assignment:3", "template")] = assignment_rec("assignment:3", TEMPLATE, "document")
-    monkeypatch.setattr(cal, "load_records", lambda: recs)
+    monkeypatch.setattr(cal, "load_records", lambda mode="fields": recs)
     text, _, plans = cal.report(items, [], 0.5)
     assert "From the type (test, problem set or lab, so no template question): 2, 1 right (50%)" in text
     assert "template accuracy is 67% of 3" in text and "assignment:2: dashboard, labeled checklist" in text
@@ -147,6 +157,72 @@ def test_report_scores_a_template_the_type_settles_as_its_default(monkeypatch):
     assert "To clarify (thinking ended off the fast pass's answer, or at the cap): 0 of 3" in text
     text, _, _ = cal.report(items, [], 0.5, template_from_type=False)
     assert "Not recorded yet: 2 labeled fields" in text and "From the type" not in text
+
+
+# ---- option offsets and temperatures ----------------------------------------------------------
+
+
+def credit_rec(label: str, probs: list[float]) -> dict:
+    """A credit record from forward probabilities (full, partial, none, can't tell)."""
+    top = max(range(4), key=probs.__getitem__)
+    p = {"probs": probs, "share": sum(probs), "conf": probs[top] / sum(probs), "top": top, "probe_tokens": 0}
+    return {"key": "k", "field": "credit", "options": ["full", "partial", "none", "cant_tell"], "label": label,
+            "forward": p, "reversed": p, "trace": [{"think_tokens": 40, **p}], "finished": True, "think_tokens": 40}
+
+
+LEANS_NONE = [credit_rec("full", [0.35, 0.03, 0.6, 0.02]) for _ in range(15)] + \
+             [credit_rec("none", [0.1, 0.02, 0.86, 0.02]) for _ in range(5)]
+
+
+def test_offsets_undo_a_lean_and_are_kept_when_they_help_held_out():
+    fit = cal.prepare("credit", LEANS_NONE)
+    assert fit.held_out == (5, 20) and fit.offsets is not None
+    full, _, none, _ = fit.offsets
+    assert full > none and abs(sum(fit.offsets)) < 0.01  # centered on 0
+    assert all(r["forward"]["top"] == cal.right(r) for r in fit.recs)
+    assert all(r["reversed"]["top"] == cal.right(r) for r in fit.recs)
+    assert fit.recs[0]["forward"]["conf"] > 0.5 and fit.recs[0]["trace"] == LEANS_NONE[0]["trace"]  # thinking as recorded
+    assert cal.prepare("topic", LEANS_NONE).held_out is None  # topic's options are per class
+
+
+def test_offsets_are_dropped_when_they_dont_help():
+    fair = [credit_rec("none", [0.35, 0.03, 0.6, 0.02]) for _ in range(20)]
+    fit = cal.prepare("credit", fair)
+    assert fit.offsets is None and fit.recs is fair and fit.held_out == (20, 20)
+
+
+def test_proposal_carries_offsets_and_both_temperatures():
+    p = cal.plan("credit", LEANS_NONE, 0.5)
+    line = cal.proposal([p])["lines"]["credit"]
+    assert list(line["offsets"]) == ["full", "partial", "none", "cant_tell"]
+    assert line["offsets"]["full"] == p.offsets[0]
+    assert {"fast", "think", "temperature", "think_temperature"} <= set(line)
+
+
+def test_temperature_softens_an_overconfident_field_and_sharpens_a_timid_one():
+    over = [([0.99, 0.01], 0)] * 7 + [([0.99, 0.01], 1)] * 3  # says 99%, right 70%
+    assert cal.fit_temperature(over) > 1
+    timid = [([0.6, 0.4], 0)] * 10  # says 60%, always right
+    assert cal.fit_temperature(timid) == cal.TEMPERATURES[0] < 1
+    assert cal.fit_temperature([]) == 1.0
+
+
+def test_thinking_probes_need_the_floor_and_their_own_temperature():
+    from decider.probe import CALIBRATION_FLOOR, calibrated
+
+    assert calibrated([1.0, 0.0, 0.0, 0.0], 2.0) == pytest.approx(1 / (1 + 3 * CALIBRATION_FLOOR ** 0.5))
+    assert calibrated([0.0, 0.0], 1.0) == 0.0
+    pairs = [([0.7, 0.3], 0, False)] * 10 + [([1.0, 0.0], 0, True)] * 6 + [([1.0, 0.0], 1, True)] * 4
+    fast_t, think_t = cal.fit_temperatures(pairs)
+    assert fast_t < 1 < think_t  # the fast pass was always right; thinking said 100% and was right 60%
+    raw, held = cal.held_out_ece(pairs)
+    assert held < raw
+
+
+def test_ece_is_the_gap_between_confidence_and_accuracy():
+    assert cal.ece([(0.9, True)] * 9 + [(0.9, False)]) == pytest.approx(0.0)
+    assert cal.ece([(1.0, True), (1.0, False)]) == pytest.approx(0.5)
+    assert cal.ece([]) == 0.0
 
 
 def test_tidy_keeps_outcomes():
@@ -275,6 +351,54 @@ def test_score_counts_tiers_caps_and_fast_answers():
     fast = compare.score("fast", [item], {item.key: r})
     assert fast.accuracy(["type", "effort"]) == (1, 2) and fast.sec_per_item == 0.5
     assert fast.cost_per_1000 == pytest.approx(0.5 * 1000 / 3600 * compare.GPU_HOUR)
+
+
+def test_effort_is_also_scored_within_one_level():
+    from eval.items import Item
+
+    assert compare.within_one("effort", "one_solid_session", "one_short_sitting")
+    assert not compare.within_one("effort", "multi_day", "one_short_sitting")
+    assert not compare.within_one("effort", None, "one_short_sitting")
+    item = Item("assignment", "assignment:1", "Bio", {}, {"effort": "multi_day"})
+    sc = compare.score("d1", [item], {item.key: {"answers": {"effort": "two_or_three_sessions"}, "seconds": 0.3}})
+    assert sc.accuracy(["effort"]) == (0, 1) and sc.near == {"effort": [True]}
+
+
+def test_joint_setup_scores_tiers_like_system_one():
+    from eval.items import Item
+
+    item = Item("assignment", "assignment:1", "Bio", {}, {"type": "reading"})
+    r = {"answers": {"type": "reading"}, "fast_answers": {"type": "reading"}, "tiers": {"type": "instant"},
+         "looped": {"type": False}, "cap_hits": {"type": False}, "seconds": 1.0, "fast_seconds": 0.2}
+    assert compare.score("joint", [item], {item.key: r}).tiers["type"]["instant"] == 1
+
+
+def test_d1_gets_each_field_as_a_choice_question_and_answers_map_back():
+    import json as _json
+
+    import httpx
+
+    from eval.items import Item
+
+    q = compare.d1_question(choice_for(TEMPLATE))
+    assert q["type"] == "choice" and q["instructions"].startswith(TEMPLATE.question)
+    assert list(q["criteria"]) == [o.value for o in TEMPLATE.options]
+    assert q["criteria"]["document"].startswith("Document")
+    rules = compare.d1_question(choice_for(TYPE))["instructions"]
+    assert all(f"Rule: {r}" in rules for r in TYPE.rules)
+
+    sent = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(_json.loads(request.content))
+        return httpx.Response(200, json={"answers": {
+            "type": {"choice": "reading", "probabilities": {"reading": 0.9}},
+            "template": {"choice": "poster"}, "effort": {"choice": "multi_day"}}})
+
+    item = Item("assignment", "assignment:1", "Bio", {"course": "Bio", "title": "Read ch. 5"}, {"type": "reading"})
+    got = compare.d1_item(httpx.Client(transport=httpx.MockTransport(handle)), item)
+    assert got["answers"] == {"type": "reading", "template": None, "effort": "multi_day"}
+    assert sent[0]["state"] == item.context() and list(sent[0]["questions"]) == ["type", "template", "effort"]
 
 
 def test_combine_blank_labels():

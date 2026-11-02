@@ -2,15 +2,22 @@
 
 letter_share is how much of the probability lands on the option letters at all; confidence is the
 top option's share of that.
+
+Two fitted corrections come from decisions/lines.json (eval/calibrate.py fits both): per-option
+offsets that undo a field's lean on the fast pass (credit leaned towards "none"), and temperatures
+(one for fast-pass probes, one for thinking probes) that turn a decision's confidence into an honest
+chance of being right.
 """
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .llama import Llama
 from .prompts import LETTERS, Choice
 
 N_PROBS = 20
+CALIBRATION_FLOOR = 1e-4  # an option's least share of the letters before a temperature (tempered)
 
 
 @dataclass(frozen=True)
@@ -59,3 +66,35 @@ def probe(llama: Llama, prompt: list[int], choice: Choice, slot: int) -> Probe:
 
 def clears(p: Probe, line: float, share_min: float) -> bool:
     return p.confidence >= line and p.letter_share >= share_min
+
+
+def shift(probs: Sequence[float], offsets: Sequence[float]) -> list[float]:
+    """Each option's probability times e^offset, renormalized to the same letter share."""
+    share = sum(probs)
+    weights = [p * math.exp(b) for p, b in zip(probs, offsets)]
+    total = sum(weights)
+    return [share * w / total for w in weights] if total > 0 else list(probs)
+
+
+def shifted(p: Probe, offsets: Sequence[float] | None) -> Probe:
+    """The probe with the field's option offsets applied (no offsets: unchanged)."""
+    if not offsets or p.letter_share <= 0:
+        return p
+    probs = shift(p.probs, offsets)
+    top = max(range(len(probs)), key=probs.__getitem__)
+    return Probe(tuple(probs), p.letter_share, probs[top] / p.letter_share, top, p.probe_tokens)
+
+
+def tempered(probs: Sequence[float], temperature: float) -> list[float]:
+    """The letter probabilities, normalized, each at least CALIBRATION_FLOOR, at a temperature
+    (over 1 softens). The floor matters after thinking, where the other letters fall out of the top
+    20 and read as exactly 0, which no temperature could soften."""
+    share = sum(probs)
+    weights = [max(p / share, CALIBRATION_FLOOR) ** (1 / temperature) for p in probs]
+    total = sum(weights)
+    return [w / total for w in weights]
+
+
+def calibrated(probs: Sequence[float], temperature: float) -> float:
+    """The top option's chance of being right, at the field's fitted temperature."""
+    return max(tempered(probs, temperature)) if sum(probs) > 0 else 0.0

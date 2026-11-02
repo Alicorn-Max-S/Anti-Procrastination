@@ -1,10 +1,12 @@
 """The fast pass: a forward probe with empty thinking, then, only if it clears the fast line, the
-same question with the options reversed. Acting needs both to pick the same option."""
+same question with the options reversed. Acting needs both to pick the same option. Both probes
+get the field's option offsets (decisions/lines.json) before the line is checked."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .llama import Llama
-from .probe import Probe, clears, probe
+from .probe import Probe, clears, probe, shifted
 from .prompts import Choice, Prompt
 
 
@@ -22,13 +24,14 @@ class FastPass:
 
 def fast_pass(
     llama: Llama, context: str, choice: Choice, fast_line: float, share_min: float,
-    fast_format: str, slot: int = 0,
+    fast_format: str, slot: int = 0, offsets: Sequence[float] | None = None,
 ) -> FastPass:
     prompt = Prompt(llama, context, choice.block(), fast_format)
-    forward = probe(llama, prompt.answer([]), choice, slot)
+    forward = shifted(probe(llama, prompt.answer([]), choice, slot), offsets)
     if not clears(forward, fast_line, share_min):
         return FastPass(prompt, forward, None, False)
     flipped = choice.reversed()
-    back = probe(llama, Prompt(llama, context, flipped.block(), fast_format).answer([]), flipped, slot)
+    back = shifted(probe(llama, Prompt(llama, context, flipped.block(), fast_format).answer([]), flipped, slot),
+                   offsets)
     instant = back.top == forward.top and back.letter_share >= share_min
     return FastPass(prompt, forward, back, instant)

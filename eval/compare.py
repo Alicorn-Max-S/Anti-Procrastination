@@ -1,4 +1,4 @@
-"""compare (spec, Part C): four setups on the labeled set, scored against Max's labels.
+"""compare (spec, Part C): six setups on the labeled set, scored against Max's labels.
 
 1. All Spark: Muse Spark with structured output, one call per item covering all of its fields.
    Cost comes from the usage the API returns, at Standard prices.
@@ -7,6 +7,13 @@
 3. System One, fast pass only: the forward fast-pass probe's answer for every field, timed by the
    fast pass alone. Taken from setup 4's records.
 4. System One, full: the decider with the lines file (decisions/lines.json unless LINES_FILE says otherwise).
+5. System One, shared chain: the decider in joint mode (decider/joint.py) with
+   decisions/lines.joint.json: an assignment's fields in one prompt and one thinking chain. Test
+   questions are decided per field, as in setup 4.
+6. Liquid d1-2B: a 2B decision model on its own llama-server (D1_URL), every field of an item as a
+   choice question in one /v1/systemone call. It never thinks and has no letters: each option is a
+   named criterion, and the question carries the field's rules and worked examples, which the other
+   setups get in their system turn.
 
 Every setup sees the same item text (Item.context) and the same questions, options and letters
 (decider.prompts.choice_for, built from decisions/fields.py). Setups 1 and 2 get all of an item's
@@ -14,16 +21,20 @@ questions in one message, each question block exactly as the decider asks it; on
 line that says how to reply differs. A graded test's questions go to the decider together, as in
 Part B, so each question is charged the test's wall time divided by its questions.
 
+Effort's options are in order of size, so it's also scored within one level (calibrate.ORDINAL).
+eval/audit.md lists the labels Spark, base Glimmer and System One all miss, to check by hand.
+
 Per-item records stay in data/eval/compare/<setup>.jsonl; the outputs hold aggregates only.
 """
 
 import csv
 import hashlib
 import json
+import os
 import re
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from statistics import mean
 
@@ -31,45 +42,37 @@ import httpx
 
 from decider.config import Settings, settings
 from decider.decide import Decider
+from decider.joint import MULTI_SYSTEM, questions_text, user_text
 from decider.llama import Llama
-from decider.prompts import LETTERS, REPLY, SYSTEM, Choice, choice_for
+from decider.prompts import FIELDS, LETTERS, Choice, choice_for, option_text
 from decisions.fields import ASSIGNMENT_FIELDS, ASSIGNMENT_KIND, QUESTION_FIELDS
 
-from .calibrate import COST
+from .calibrate import COST, ORDINAL
 from .items import EVAL_DATA, ROOT, Item, Skipped
 
 OUT = ROOT / "eval"
 RECORDS = EVAL_DATA / "compare"
-RUNNABLE = ("spark", "glimmer", "system_one")
+RUNNABLE = ("spark", "glimmer", "system_one", "joint", "d1")
+DECIDERS = ("system_one", "joint")  # setups that run the decider, and so have tiers
 TIERS = ("instant", "thought", "guessed", "default")  # decider/decide.py
 SETUPS = {  # in chart and table order
     "spark": "All Spark",
     "glimmer": "Base Glimmer",
     "fast": "System One, fast pass only",
     "system_one": "System One, full",
+    "joint": "System One, shared chain",
+    "d1": "Liquid d1-2B",
 }
 SPARK_PRICES = {"input": 1.25, "cached": 0.15, "output": 4.25}  # $ per million tokens, Standard mode
 GPU_HOUR = 1.10  # $ per hour: Modal's A10, as a rental proxy for Glimmer's GPU time
 GLIMMER_MAX_TOKENS = 4096
 RETRIES = 3
-
-# One message with all of an item's questions. Same role text as the decider's system turn, which
-# expects a single question, so only the part about how many questions and how to answer changes.
-MULTI_SYSTEM = SYSTEM.replace(
-    "and one multiple-choice question about it. Answer with the letter of the best option and nothing else.",
-    "and a few multiple-choice questions about it. Answer each question with the letter of its best option.",
-)
-assert MULTI_SYSTEM != SYSTEM, "decider SYSTEM text changed: update MULTI_SYSTEM"
+D1_URL = os.getenv("D1_URL", "http://127.0.0.1:8081").rstrip("/")
 SPARK_INSTRUCTIONS = MULTI_SYSTEM.split("\n\nReasoning strength:")[0]  # that line is Glimmer's
 
 
 def choices(item: Item) -> list[Choice]:
     return [choice_for(f, item.topics) for f in item.fields]
-
-
-def questions_text(cs: list[Choice]) -> str:
-    """Every question block as the decider shows it, under its field name, without its reply line."""
-    return "\n\n".join(f"[{c.field}]\n" + c.block().removesuffix("\n" + REPLY) for c in cs)
 
 
 def letter_value(c: Choice, letter: str | None) -> str | None:
@@ -145,13 +148,11 @@ def parse_letters(text: str, cs: list[Choice]) -> dict[str, str | None]:
 
 def glimmer_item(llama: Llama, item: Item, seed: int) -> dict:
     cs = choices(item)
-    form = "\n".join(f"{c.field}: <letter>" for c in cs)
     body = {
         "model": llama.model(),
         "messages": [
             {"role": "system", "content": MULTI_SYSTEM},
-            {"role": "user", "content": f"{item.context()}\n\n{questions_text(cs)}\n\n"
-                                        f"Reply with one line per question, in this form:\n{form}"},
+            {"role": "user", "content": user_text(item.context(), cs)},
         ],
         "max_tokens": GLIMMER_MAX_TOKENS,
         "chat_template_kwargs": {"reasoning_strength": "low"},
@@ -175,7 +176,44 @@ def glimmer_item(llama: Llama, item: Item, seed: int) -> dict:
     }
 
 
-# ---- setups 3 and 4: System One ---------------------------------------------------------------
+# ---- setup 6: Liquid d1-2B --------------------------------------------------------------------
+
+
+def d1_question(c: Choice) -> dict:
+    """A field as a d1 choice question: the question, then the field's rules and worked examples (the
+    other setups see those in their system turn); each option a criterion named by its value."""
+    f = FIELDS[c.field]
+    lines = [c.question] + [f"Rule: {r}" for r in f.rules]
+    if f.examples:
+        label = {o.value: o.label for o in c.options}
+        lines += ["Worked examples (the item, then the answer):"]
+        lines += [f"- {e.item} → {label.get(e.answer, e.answer)}" for e in f.examples]
+    return {"type": "choice", "instructions": "\n".join(lines),
+            "criteria": {c.options[i].value: option_text(c.options[i]) for i in c.order}}
+
+
+def d1_item(http: httpx.Client, item: Item) -> dict:
+    cs = choices(item)
+    body = {"state": item.context(), "questions": {c.field: d1_question(c) for c in cs}}
+    start = time.perf_counter()
+    r = http.post(D1_URL + "/v1/systemone", json=body)
+    seconds = time.perf_counter() - start
+    r.raise_for_status()
+    got = r.json()["answers"]
+    values = {c.field: {o.value for o in c.options} for c in cs}
+    return {
+        "answers": {f: a.get("choice") if a.get("choice") in values[f] else None for f, a in got.items()},
+        "probabilities": {f: a.get("probabilities") for f, a in got.items()},
+        "seconds": round(seconds, 3),
+    }
+
+
+def d1_model(http: httpx.Client) -> str:
+    props = http.get(D1_URL + "/props", timeout=10).json()
+    return os.path.splitext(os.path.basename(props.get("model_alias") or props.get("model_path") or "d1"))[0]
+
+
+# ---- setups 3, 4 and 5: System One ------------------------------------------------------------
 
 
 class TimedDecider(Decider):
@@ -232,20 +270,24 @@ def system_one_group(decider: TimedDecider, group: list[Item], seed: int) -> lis
 # ---- running --------------------------------------------------------------------------------
 
 
-def lines_hash() -> str:
+def lines_hash(mode: str = "fields") -> str:
     from eval.run import lines_path
 
-    return hashlib.sha256(lines_path().read_bytes()).hexdigest()[:12]
+    return hashlib.sha256(lines_path(mode).read_bytes()).hexdigest()[:12]
 
 
-def run_id(setup: str, llama: Llama | None, seed: int) -> dict:
+def run_id(setup: str, llama: Llama | None, seed: int, d1: httpx.Client | None = None) -> dict:
     if setup == "spark":
         from app.config import settings as app_settings
 
         return {"model": app_settings.meta_model, "prompt_version": settings.prompt_version}
+    if setup == "d1":
+        return {"model": d1_model(d1), "prompt_version": settings.prompt_version}
     rid = {"model": llama.model(), "seed": seed, "prompt_version": settings.prompt_version}
-    if setup == "system_one":
+    if setup in DECIDERS:
         rid |= {"lines": lines_hash(), "cap": settings.cap_tokens, "slots": settings.parallel_slots}
+    if setup == "joint":  # test questions still use lines.json
+        rid |= {"joint_lines": lines_hash("joint"), "mode": "joint"}
     return rid
 
 
@@ -282,18 +324,22 @@ def run_setups(llama: Llama | None, items: list[Item], setups: Iterable[str], se
                fresh: bool = False) -> None:
     RECORDS.mkdir(parents=True, exist_ok=True)
     for setup in [s for s in RUNNABLE if s in setups]:
-        rid = run_id(setup, llama, seed)
-        have = {} if fresh else {k: r for k, r in load_records(setup).items() if r["run"] == rid}
-        todo = [g for g in groups(items) if setup != "system_one" or any(i.key not in have for i in g)]
-        if setup != "system_one":
-            todo = [[i] for g in todo for i in g if i.key not in have]
-        print(f"compare {setup}: {sum(len(g) for g in todo)} items to run", flush=True)
         client = None
-        decider = TimedDecider(llama, settings) if setup == "system_one" else None
         if setup == "spark":
             from app import meta_client
 
             client = meta_client._client()
+        elif setup == "d1":
+            client = httpx.Client(timeout=120)
+        rid = run_id(setup, llama, seed, client)
+        have = {} if fresh else {k: r for k, r in load_records(setup).items() if r["run"] == rid}
+        todo = [g for g in groups(items) if setup not in DECIDERS or any(i.key not in have for i in g)]
+        if setup not in DECIDERS:
+            todo = [[i] for g in todo for i in g if i.key not in have]
+        print(f"compare {setup}: {sum(len(g) for g in todo)} items to run", flush=True)
+        decider = None
+        if setup in DECIDERS:
+            decider = TimedDecider(llama, replace(settings, mode="joint" if setup == "joint" else "fields"))
         start = time.perf_counter()
         try:
             with (RECORDS / f"{setup}.jsonl").open("a", encoding="utf-8") as out:
@@ -302,6 +348,8 @@ def run_setups(llama: Llama | None, items: list[Item], setups: Iterable[str], se
                         recs = [spark_item(client, group[0])]
                     elif setup == "glimmer":
                         recs = [glimmer_item(llama, group[0], seed)]
+                    elif setup == "d1":
+                        recs = [d1_item(client, group[0])]
                     else:
                         recs = system_one_group(decider, group, seed)
                     for item, r in zip(group, recs):
@@ -334,6 +382,7 @@ class Score:
     loops: dict[str, int] = field(default_factory=dict)
     cap_hits: dict[str, int] = field(default_factory=dict)
     clarify: dict[str, list[bool]] = field(default_factory=dict)  # field -> right, per field sent to clarify
+    near: dict[str, list[bool]] = field(default_factory=dict)  # ORDINAL field -> within one level
     unparsed: int = 0
     truncated: int = 0
 
@@ -352,6 +401,12 @@ class Score:
         return sum(marks), len(marks)
 
 
+def within_one(f: str, answer: str | None, label: str) -> bool:
+    """For an ORDINAL field: the answer is the label or a neighbour of it."""
+    order = [o.value for o in FIELDS[f].options]
+    return answer in order and abs(order.index(answer) - order.index(label)) <= 1
+
+
 def score(setup: str, items: list[Item], recs: dict[str, dict]) -> Score:
     sc = Score(setup)
     for item in items:
@@ -365,7 +420,9 @@ def score(setup: str, items: list[Item], recs: dict[str, dict]) -> Score:
         sc.seconds_by_kind.setdefault(item.kind, []).append(seconds)
         for f, label in item.labels.items():
             sc.fields.setdefault(f, []).append(answers.get(f) == label)
-            if setup == "system_one":
+            if f in ORDINAL:
+                sc.near.setdefault(f, []).append(within_one(f, answers.get(f), label))
+            if setup in DECIDERS:
                 tiers = sc.tiers.setdefault(f, dict.fromkeys(TIERS, 0))
                 tiers[r["tiers"][f]] += 1
                 if r.get("clarify", {}).get(f):
@@ -379,8 +436,9 @@ def score(setup: str, items: list[Item], recs: dict[str, dict]) -> Score:
             sc.usage["cached"] += (u.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
             sc.usage["output"] += u.get("output_tokens", 0)
             sc.usage["reasoning"] += (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0) or 0
-        if setup == "glimmer":
+        if setup in ("glimmer", "d1"):
             sc.unparsed += sum(v is None for v in r["answers"].values())
+        if setup == "glimmer":
             sc.truncated += r["finish_reason"] == "length"
     return sc
 
@@ -417,12 +475,16 @@ def write_csv(scores: list[Score]) -> None:
                 if scope == "all":
                     row |= {"items": sc.items, "seconds_per_item": round(sc.sec_per_item, 3),
                             "cost_per_1000_items": round(sc.cost_per_1000, 4)}
-                if sc.setup == "system_one":
+                if sc.setup in DECIDERS:
                     t = {k: sum(sc.tiers.get(f, {}).get(k, 0) for f in names) for k in TIERS}
                     asked = [ok for f in names for ok in sc.clarify.get(f, [])]
                     row |= t | {"loops": sum(sc.loops.get(f, 0) for f in names),
                                 "cap_hits": sum(sc.cap_hits.get(f, 0) for f in names),
                                 "clarify": len(asked), "clarify_wrong": len(asked) - sum(asked)}
+                w.writerow([row.get(c, "") for c in cols])
+            for f, near in sc.near.items():
+                row = {"setup": name, "scope": f"{f} within one level", "fields": len(near),
+                       "correct": sum(near), "accuracy": round(sum(near) / len(near), 4)}
                 w.writerow([row.get(c, "") for c in cols])
             for kind, secs in sc.seconds_by_kind.items():
                 w.writerow([name, f"{kind} items", len(secs), "", "", "", round(mean(secs), 3)]
@@ -435,7 +497,8 @@ def write_chart(scores: list[Score]) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    colors = {"spark": "#2a6fdb", "glimmer": "#d9822b", "fast": "#7a52c7", "system_one": "#1f9e6e"}
+    colors = {"spark": "#2a6fdb", "glimmer": "#d9822b", "fast": "#7a52c7", "system_one": "#1f9e6e",
+              "joint": "#0f6b4a", "d1": "#c2417a"}
     fig, ax = plt.subplots(figsize=(8, 5.2), dpi=150)
     for sc in scores:
         ok, n = sc.accuracy(GROUPS["all"])
@@ -496,25 +559,34 @@ def write_summary(items: list[Item], skipped: list[Skipped], scores: list[Score]
         n = max(sc.accuracy([f])[1] for sc in scores) if scores else 0
         if n:
             lines.append(f"| {f} ({n}) | {COST[f]} | " + " | ".join(cells) + " |")
-    one = by.get("system_one")
-    if one:
-        lines += ["", "## System One tiers", "",
+        if n and f in ORDINAL:
+            cells = [_pct(sum(sc.near.get(f, [])), len(sc.near.get(f, []))) for sc in scores]
+            lines.append(f"| {f}, within one level | {COST[f]} | " + " | ".join(cells) + " |")
+
+    def row(name: str, t: dict, loops: int, caps: int, asked: list[bool]) -> str:
+        n = sum(t.values())
+        return (f"| {name} | {_pct(t['instant'], n)} | {_pct(t['thought'], n)} | {_pct(t['guessed'], n)} | "
+                f"{_pct(t['default'], n)} | {loops} | {caps} ({_pct(caps, loops)}) | "
+                f"{len(asked)} ({len(asked) - sum(asked)}) |")
+
+    for setup in DECIDERS:
+        one = by.get(setup)
+        if not one:
+            continue
+        lines += ["", f"## {SETUPS[setup]}: tiers", "",
                   "| Field | Instant | Thought | Guessed | From the type | Thinking loops | Hit the cap | To clarify (wrong) |",
                   "|---|---|---|---|---|---|---|---|"]
-
-        def row(name: str, t: dict, loops: int, caps: int, asked: list[bool]) -> str:
-            n = sum(t.values())
-            return (f"| {name} | {_pct(t['instant'], n)} | {_pct(t['thought'], n)} | {_pct(t['guessed'], n)} | "
-                    f"{_pct(t['default'], n)} | {loops} | {caps} ({_pct(caps, loops)}) | "
-                    f"{len(asked)} ({len(asked) - sum(asked)}) |")
-
         for f in FIELD_ORDER:
             if one.tiers.get(f):
                 lines.append(row(f, one.tiers[f], one.loops.get(f, 0), one.cap_hits.get(f, 0), one.clarify.get(f, [])))
         tot = {k: sum(t[k] for t in one.tiers.values()) for k in TIERS}
         lines.append(row("all", tot, sum(one.loops.values()), sum(one.cap_hits.values()),
                          [ok for v in one.clarify.values() for ok in v]))
-        lines += ["", f"Lines: `{lines_name()}` = `{lines_json()}`."]
+        mode = "joint" if setup == "joint" else "fields"
+        lines += ["", f"Lines: `{lines_name(mode)}` = `{lines_json(mode)}`."]
+        if setup == "joint":
+            lines += ["", f"Its test questions are decided per field with `{lines_name()}`, as in "
+                          f"{SETUPS['system_one']}."]
     lines += ["", "## How the numbers are made", ""]
     lines.append("- Seconds per item is wall clock per call. The decider gets a graded test's questions in "
                  "one call, as Part B will, so each question counts that call's time divided by its questions. "
@@ -534,6 +606,15 @@ def write_summary(items: list[Item], skipped: list[Skipped], scores: list[Score]
     if gl:
         lines.append(f"- Base Glimmer: {gl.unparsed} answers couldn't be read from its reply and count as "
                      f"wrong; {gl.truncated} replies hit the {GLIMMER_MAX_TOKENS}-token limit.")
+    d1 = by.get("d1")
+    if d1:
+        lines.append(f"- Liquid d1-2B answers every field of an item in one `/v1/systemone` call, each a choice "
+                     "question whose instructions hold the field's question, rules and worked examples, with "
+                     f"each option a criterion. Its GPU seconds are priced like Glimmer's. {d1.unparsed} "
+                     "answers weren't one of the options and count as wrong.")
+    if any(f in ORDINAL for f in FIELD_ORDER):
+        lines.append("- Within one level: effort's options run from one short sitting to multi-day, so an "
+                     "answer one size off the label counts there.")
     if skipped:
         reasons: dict[str, int] = {}
         for s in skipped:
@@ -544,31 +625,66 @@ def write_summary(items: list[Item], skipped: list[Skipped], scores: list[Score]
     return text
 
 
-def lines_name() -> str:
+def lines_name(mode: str = "fields") -> str:
     from eval.run import lines_path
 
-    p = lines_path()
+    p = lines_path(mode)
     return p.relative_to(ROOT).as_posix() if p.is_relative_to(ROOT) else str(p)
 
 
-def lines_json() -> str:
+def lines_json(mode: str = "fields") -> str:
     from eval.run import lines_path
 
-    return json.dumps(json.loads(lines_path().read_text(encoding="utf-8")), separators=(", ", ": "))
+    p = lines_path(mode)
+    if not p.exists():
+        return "(none yet)"
+    return json.dumps(json.loads(p.read_text(encoding="utf-8")), separators=(", ", ": "))
+
+
+AUDITED = ("spark", "glimmer", "system_one")
+
+
+def write_audit(items: list[Item], recs: dict[str, dict[str, dict]]) -> int:
+    """data/eval/audit.md: every label that Spark, base Glimmer and System One all answer otherwise,
+    with each setup's answer, to check the label by hand. Real item text, so it stays under data/.
+    Returns how many."""
+    rows = []
+    for item in items:
+        got = {s: recs[s].get(item.key) for s in AUDITED if recs.get(s)}
+        if len(got) < len(AUDITED) or any(r is None for r in got.values()):
+            continue
+        for f, label in item.labels.items():
+            answers = {s: r["answers"].get(f) for s, r in got.items()}
+            if all(a != label for a in answers.values()):
+                rows.append((item, f, label, answers))
+    out = ["# Labels every setup misses", "",
+           f"{len(rows)} labels that {', '.join(SETUPS[s] for s in AUDITED)} all answer otherwise. When the "
+           "three agree with each other, check the label first.", ""]
+    for item, f, label, answers in rows:
+        same = len(set(answers.values())) == 1
+        title = item.context().splitlines()[0][:100]
+        out.append(f"- `{item.key}` {f}: labeled **{label}**; "
+                   + ", ".join(f"{SETUPS[s]} {a}" for s, a in answers.items())
+                   + (" (all three agree)" if same else "") + f". {title}")
+    EVAL_DATA.mkdir(parents=True, exist_ok=True)
+    (EVAL_DATA / "audit.md").write_text("\n".join(out) + "\n", encoding="utf-8")
+    return len(rows)
 
 
 def write_outputs(items: list[Item], skipped: list[Skipped], seed: int) -> None:
-    sys_recs = load_records("system_one")
+    recs = {s: load_records(s) for s in RUNNABLE}
     scores = []
     for setup in SETUPS:
-        recs = sys_recs if setup == "fast" else load_records(setup)
-        if recs:
-            scores.append(score(setup, items, recs))
+        got = recs["system_one"] if setup == "fast" else recs[setup]
+        if got:
+            scores.append(score(setup, items, got))
     if not scores:
         raise SystemExit("No compare records yet: run compare without --report first.")
-    model = next((r["run"]["model"] for s in ("system_one", "glimmer") for r in load_records(s).values()), "Glimmer")
+    model = next((r["run"]["model"] for s in ("system_one", "glimmer") for r in recs[s].values()), "Glimmer")
     OUT.mkdir(exist_ok=True)
     write_csv(scores)
     write_chart(scores)
     print(write_summary(items, skipped, scores, seed, model))
-    print("Wrote eval/results.csv, eval/summary.md and eval/compare.png.")
+    audited = write_audit(items, recs)
+    print(f"Wrote eval/results.csv, eval/summary.md and eval/compare.png; data/eval/audit.md lists {audited} "
+          "labels every setup misses.")

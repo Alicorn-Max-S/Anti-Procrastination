@@ -87,6 +87,7 @@ class Decision(BaseModel):
     value: str
     option_index: int
     confidence: float
+    calibrated_confidence: float  # the chance it's right: confidence at the field's fitted temperature
     letter_share: float
     flipped: bool | None
     tier: Literal["instant", "thought", "guessed", "default"]

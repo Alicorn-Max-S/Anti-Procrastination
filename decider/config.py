@@ -32,16 +32,25 @@ class Settings:
     # How the fast pass ends the prompt: an empty thinking message, or straight to the answer.
     # glimmer_check.py check 3 picks it (empty thinking put 0.998 on the letters, none 0.880).
     fast_pass_format: str = os.getenv("FAST_PASS_FORMAT", "empty-thinking")
+    # How an assignment is decided. "fields": each field in its own prompt, with its own thinking.
+    # "joint": every field in one prompt and one thinking chain, a probe per field (decider/joint.py),
+    # on its own lines file. Test questions are always decided per field.
+    mode: str = os.getenv("DECIDER_MODE", "fields")
+    joint_lines_file: str = os.getenv("JOINT_LINES_FILE", "decisions/lines.joint.json")
 
 
 settings = Settings()
+MODES = ("fields", "joint")
 
 
 @dataclass(frozen=True)
 class Lines:
-    """Per-field confidence lines and the cheap fields that skip thinking (decisions/lines.json)."""
+    """Per-field confidence lines, offsets and temperature, and the cheap fields that skip thinking
+    (decisions/lines.json). A field's entry is {"fast", "think"} plus, once calibrate fits them,
+    "offsets" ({option value: log offset}, for the fast pass), "temperature" (for a decision from the
+    fast pass) and "think_temperature" (from a thinking probe)."""
 
-    lines: dict[str, dict[str, float]]
+    lines: dict[str, dict]
     skip_thinking: frozenset[str]
 
     def fast(self, field: str) -> float:
@@ -49,6 +58,15 @@ class Lines:
 
     def think(self, field: str) -> float:
         return self.lines.get(field, {}).get("think", DEFAULT_LINE)
+
+    def offsets(self, field: str, values: list[str]) -> tuple[float, ...] | None:
+        """The field's fast-pass offsets in option order, or None when it has none."""
+        got = self.lines.get(field, {}).get("offsets")
+        return tuple(got.get(v, 0.0) for v in values) if got else None
+
+    def temperature(self, field: str, thinking: bool = False) -> float:
+        """For a decision from the fast pass, or from a thinking probe (thinking True)."""
+        return self.lines.get(field, {}).get("think_temperature" if thinking else "temperature", 1.0)
 
 
 def load_lines(path: str) -> Lines:

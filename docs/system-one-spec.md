@@ -127,6 +127,13 @@ Part B only starts if the go/no-go check in Part C passes.
   - Effort fell from 145 to 138 right of 191 (72.3%, the fast pass's own score); the calibration records predicted 5 fewer. Type went 176 → 174 and template 164 → 165. Those small moves come from batched decoding on 4 slots, not from a rule change. Format, topic and credit didn't change.
   - Assignments: 7.9 s mean (median 6.2, against 13.3 and 12.1), now faster than base Glimmer's 9.3 s and behind Spark's 5.6 s. 48 of 197 assignments need no thinking at all (1.3 s). Test questions: 2.5 s each (against 4.1), faster than Spark (4.3) and base Glimmer (9.4).
   - Tiers: 37% instant, 27% thought, 25% guessed (effort's 69% guessed is most of it), 11% from the type; 240 thinking loops, 6 at the cap. Clarify asks 46 questions (23 type, 23 template), 21 of them on wrong answers.
+- Architecture changes, Nov 1 evening, from the decision-model review (Clef, GEV-26B-Decide, Liquid d1). Built and tested against the fake server, and replayed on the v9 records; nothing approved or re-run on Glimmer yet. The proposal is in `data/eval/proposal.json`, and the prompts change next, so it gets recalibrated anyway.
+  - Option offsets: a log offset per option on both fast-pass probes, fitted by calibrate and kept only when they add 3% of the field's labeled cells held out (5-fold). On the v9 records only credit keeps them: its fast pass goes from 39 to 49 right of 51 held out (full +1.45, partial +0.50, none −1.58, can't tell −0.37). With them credit's fast line drops from 0.86 to 0.6 and it is instant on 48 of 51, all right. Type gains 2 of 189, template, effort and format none, so they keep none.
+  - Temperatures: two per field, one for decisions from the fast pass and one for decisions from a thinking probe, with each option floored at 1e-4 first. Thinking probes leave the other letters at exactly 0, which no temperature can soften: one temperature per field fitted template's at 0.5 and left it as overconfident as before. Decisions now carry `calibrated_confidence`; `confidence` stays what the lines are on. Calibration error held out: type 0.083 → 0.012, template 0.202 → 0.004, effort 0.191 → 0.078, credit 0.075 → 0.051. Format (0.029) and topic (0.023) were already calibrated and stay about the same.
+  - Effort: a fast line of 0.80 set by hand (`FAST_LINES`) instead of skipping thinking. On the v9 records: 145 instant (81% right), 46 thinking loops, 77% right overall, 97% within one level.
+  - Joint mode (`DECIDER_MODE=joint`, `decider/joint.py`), for assignments: one prompt with every field (base Glimmer's) and one thinking chain, with a probe per field after each paragraph. Each probe writes the earlier fields' answers in the "field: letter" reply form, then asks "<field>:". It has its own lines file (`decisions/lines.joint.json`, from `calibrate --mode joint`). Not recorded on Glimmer yet.
+  - Compare gained two setups (5: System One, shared chain; 6: Liquid d1-2B), effort scored within one level, and `data/eval/audit.md`: 38 labels that Spark, base Glimmer and System One all miss, to check by hand.
+  - Liquid d1-2B (Q8_0, 1.9B, its own llama-server on port 8081, every field of an item in one `/v1/systemone` call): 74.7% overall (81.3% expensive, 61.6% cheap) at 0.14 s per item, $0.044 per 1,000. By field: type 83.1, template 76.8, effort 60.2 (91.1 within one level), format 66.7, topic 100, credit 72.5. Its confidence is honest but rarely high: at 0.95 or above it's right every time, but only on 16 of 189 types and 12 of 190 templates, too few to gate Glimmer with.
 - v8 results, System One from the calibration (`data/eval/calibrate-report.v8.txt`, lines in `data/eval/proposal.v8.json`). Both columns are scored on the current labels with lines fitted on those labels, so the v6 numbers differ from the v6 table below.
 
   | Field | System One v6 → v8 | Instant v6 → v8 |
@@ -259,8 +266,20 @@ Test-question fields:
 1. Run a forward probe with empty thinking.
 2. If `confidence >= lines[field].fast` and `letter_share >= 0.5`, run a reversed-order probe: list the options in reverse and reassign the letters. Act only if the reversed probe picks the same option and also has `letter_share >= 0.5`. The tier is `instant`.
 3. Anything else is unsure. When the forward probe already fails, skip the reversed probe.
-4. If the field is unsure and it is in `skip_thinking` (a cheap field whose fast-pass error was 10% or less on the labels, or one set by hand: effort), take the forward probe's top option. The tier is `guessed`.
+4. If the field is unsure and it is in `skip_thinking` (a cheap field whose fast-pass error was 10% or less on the labels, or one set by hand), take the forward probe's top option. The tier is `guessed`.
 5. Every other unsure field goes to the thinking loop.
+
+When the lines file has offsets for the field, both fast-pass probes are shifted before the gate: each option's probability times e^offset, renormalized to the same letter share. Thinking probes are never shifted.
+
+## Joint mode
+
+`DECIDER_MODE=joint` decides an assignment's fields together; test questions are decided per field either way.
+
+- The prompt is base Glimmer's: the system turn for a few questions, the item, every question block under its `[field]` header, and the reply form `type: <letter>`, one line per field.
+- A field's probe opens the answer turn, writes the earlier fields' answers in that form, then `<field>:`. An earlier field's answer is its settled value once it has one, else its top option in the same round.
+- The fast pass is a forward round of probes, then a reversed round (every question reversed) for the fields that cleared their fast line. The tiers mean what they do per field, and a template the type settles is `default`.
+- One thinking chain serves every unsure field. After each paragraph, each field still unsure is probed; one that clears its think line is settled and written from then on. The chain stops when none is left, or as the per-field loop does (Glimmer closes its thinking, or the cap).
+- The lines come from `JOINT_LINES_FILE` (`decisions/lines.joint.json`), calibrated with `calibrate --mode joint`.
 
 ## Thinking loop
 
@@ -291,17 +310,19 @@ A FastAPI app in `decider/`, running as a separate process.
 A `Decision` is:
 
 ```
-{value, option_index, confidence, letter_share, flipped: bool|null,
+{value, option_index, confidence, calibrated_confidence, letter_share, flipped: bool|null,
  tier: "instant"|"thought"|"guessed"|"default", think_tokens, probe_tokens,
  trace: [{think_tokens, probs: {option: p}, letter_share}], prompt_version, model,
  clarify: bool}
 ```
 
-`clarify` is true for a `guessed` type or template: thinking ended on another answer than the fast pass's, or ran to the cap (or the field is in `skip_thinking`). A `default` template has no trace.
+`clarify` is true for a `guessed` type or template: thinking ended on another answer than the fast pass's, or ran to the cap (or the field is in `skip_thinking`). A `default` template has no trace, and its `calibrated_confidence` is 1.
 
-Config comes from environment variables: `GLIMMER_URL`, `PARALLEL_SLOTS=4`, `CAP_TOKENS=512`, `PARAGRAPH_MAX=96`, `MIN_PROBE_CHUNK=24`, `LETTER_SHARE_MIN=0.5`, `LINES_FILE=decisions/lines.json`, `PROMPT_VERSION`, `TEMPLATE_FROM_TYPE=1`.
+`calibrated_confidence` is the decision's chance of being right: the last probe's letter probabilities, each floored at 1e-4 of the letter share, at the field's temperature for that kind of probe (fast pass or thinking). `confidence` is the raw share the lines are on.
 
-The lines file looks like `{"lines": {field: {"fast": x, "think": y}}, "skip_thinking": [fields]}`. Until calibration runs, every field uses fast 0.85 and think 0.85, and `skip_thinking` is empty.
+Config comes from environment variables: `GLIMMER_URL`, `PARALLEL_SLOTS=4`, `CAP_TOKENS=512`, `PARAGRAPH_MAX=96`, `MIN_PROBE_CHUNK=24`, `LETTER_SHARE_MIN=0.5`, `LINES_FILE=decisions/lines.json`, `PROMPT_VERSION`, `TEMPLATE_FROM_TYPE=1`, `DECIDER_MODE=fields` (or `joint`), `JOINT_LINES_FILE=decisions/lines.joint.json`.
+
+The lines file looks like `{"lines": {field: {"fast": x, "think": y, "temperature": t, "think_temperature": t, "offsets": {option: b}}}, "skip_thinking": [fields]}`. Offsets and the temperatures are optional (no offsets, temperature 1). Until calibration runs, every field uses fast 0.85 and think 0.85, and `skip_thinking` is empty.
 
 ## Part B: wiring into the backend
 
@@ -362,18 +383,23 @@ Clarify:
 - It proposes settings:
   - Expensive fields: the lowest line that accepts zero labeled errors.
   - Cheap fields: the lowest line that accepts no more than 10% errors.
-  - `skip_thinking`: every cheap field whose fast-pass error is 10% or less, plus the ones in `SKIP_THINKING` (effort, by Max's call on Nov 1).
-  - A think line in `THINK_STOPS` is set by hand instead (credit 0.999); the report shows what the rule would give.
+  - `skip_thinking`: every cheap field whose fast-pass error is 10% or less, plus the ones in `SKIP_THINKING` (empty since effort got a hand fast line instead). A field with a hand fast line never skips.
+  - A think line in `THINK_STOPS` is set by hand instead (credit 0.999), and so is a fast line in `FAST_LINES` (effort 0.80); the report shows what the rule would give.
+  - Before the lines, option offsets for the fast pass (type, template, effort, format, credit): fitted to the labels with an L2 pull towards 0 and kept only when they add 3% of the field's labeled cells held out (5-fold). The lines are then fitted on the shifted probes.
+  - After the lines, two temperatures per field, fitted to the decisions those lines make: one for decisions from the fast pass, one for decisions from a thinking probe. The report shows the calibration error (ECE) raw and calibrated, held out.
+- `--mode joint` records each assignment's fields together, from one prompt and one shared chain (`data/eval/calibrate-joint.jsonl`), and proposes `decisions/lines.joint.json` the same way. Its report adds the shared chain's length against the same loops run one per field.
 - Template and effort are recorded with System One's type answer, and a template the type settles isn't recorded: the report scores it as the default. For type and template it also counts what would go to clarify and how many errors that catches.
 - It prints the proposal and waits for Max's approval before writing `decisions/lines.json`.
 - Go/no-go is Max's call, made from this report. If the expensive fields can't be decided instantly at any useful rate, and the reversed-order check doesn't fix that, Part B is skipped.
 
-`compare` runs four setups on the labeled set:
+`compare` runs six setups on the labeled set:
 
 1. All Spark: Muse Spark with structured output, one call per item covering all of its fields. Cost comes from the `usage` the API returns, at Standard-mode prices: $1.25 per million input tokens, $0.15 per million cached input tokens, $4.25 per million output tokens.
 2. Base Glimmer: `/v1/chat/completions` at reasoning strength low, one call per item covering all of its fields, with the answers parsed from the text.
 3. System One, fast pass only: taken from the records of setup 4.
 4. System One, full: the decider with `lines.json`.
+5. System One, shared chain: the decider in joint mode with `lines.joint.json` (test questions per field, as in setup 4).
+6. Liquid d1-2B: a 2B decision model on its own llama-server (`D1_URL`, default port 8081), every field of an item as a choice question in one `/v1/systemone` call. Each option is a criterion named by its value, and the question's instructions carry the field's rules and worked examples, which the other setups get in their system turn.
 
 Rules for the comparison:
 
@@ -383,7 +409,8 @@ Rules for the comparison:
   - Seconds per item, measured by wall clock.
   - Cost per 1,000 items. For Glimmer, price GPU seconds at $1.10 an hour (Modal's A10, as a rental proxy), and note that on Max's own card the real cost is electricity.
   - For System One, the share of fields by tier, and the cap-hit rate.
-- Outputs: `eval/results.csv`, `eval/summary.md`, and `eval/compare.png`, a chart of accuracy against seconds per item (log x axis) with one labeled point per setup and its cost per 1,000 items in the label.
+  - Effort also within one level, since its options are in order of size.
+- Outputs: `eval/results.csv`, `eval/summary.md`, and `eval/compare.png`, a chart of accuracy against seconds per item (log x axis) with one labeled point per setup and its cost per 1,000 items in the label. `data/eval/audit.md` (gitignored: it quotes item text) lists the labels Spark, base Glimmer and System One all miss.
 
 ## Design rules
 
