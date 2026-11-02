@@ -32,6 +32,13 @@
       "port": 8080
     },
     {
+      "name": "d1",
+      "runtimeExecutable": "C:\\Users\\Max\\llama.cpp\\bin\\llama-server.exe",
+      "runtimeArgs": ["-m", "C:\\Users\\Max\\llama.cpp\\models\\d1-2B-Q8_0.gguf", "-b", "8192", "-ub", "8192",
+                      "-c", "8192", "-np", "1", "-ngl", "99", "--host", "127.0.0.1", "--port", "8081"],
+      "port": 8081
+    },
+    {
       "name": "demo",
       "runtimeExecutable": ".venv/Scripts/python",
       "runtimeArgs": [

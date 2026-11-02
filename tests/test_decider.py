@@ -509,10 +509,18 @@ def test_the_type_settles_the_template_for_tests_problem_sets_and_labs(s):
 def test_template_question_has_hint_and_reply_line():
     block = choice_for(TEMPLATE).block()
     assert "Usual template by assignment type:\n- Test or quiz: Dashboard\n" in block
-    assert ("- Something else: Quick task if it's one small action with nothing to prep, Dashboard for a "
-            "participation grade, otherwise Checklist") in block
+    assert ("- Something else: Quick task if it's one small action with nothing to prep; Dashboard for a "
+            "participation grade or a journal check; otherwise Checklist") in block
     assert block.splitlines()[-1] == "Reply with just the letter."
     assert "A) Document" in block and "E) Quick task" in block
+
+
+def test_effort_question_has_hint_by_type():
+    block = choice_for(EFFORT).block()
+    assert "Usual effort by assignment type:\n- Test or quiz: Two or three sessions for a quiz" in block
+    assert "- Lab report: One solid session\n" in block
+    assert "Usual effort" not in choice_for(TYPE).block()
+    assert block.splitlines()[-1] == "Reply with just the letter."
 
 
 def test_system_turn_identical_and_description_capped(s):

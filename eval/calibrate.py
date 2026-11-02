@@ -9,7 +9,7 @@ of lines can be replayed from these records without another model call.
 Proposed lines:
 - expensive fields: the lowest line that accepts zero labeled errors;
 - cheap fields: the lowest line that accepts no more than 10% errors;
-- skip_thinking: every cheap field whose fast-pass error is 10% or less, plus SKIP_THINKING.
+- skip_thinking: every cheap field whose fast-pass error is 10% or less, plus SKIP_THINKING (any cost).
 The fast line is scored on what the gate acts on (the forward probe clears it and the reversed probe
 agrees); the think line is replayed on the fields the proposed fast line leaves unsure.
 
@@ -61,8 +61,10 @@ THINK_STOPS = {"credit": 0.999}
 # or the reversed probe disagrees (Nov 1 evening, replacing the skip): on the v9 records that gets
 # back the 5 right answers the skip lost, for about the skip's speed (Claude's replay).
 FAST_LINES = {"effort": 0.80}
-# Cheap fields that skip thinking by hand, whatever their fast-pass error (effort did, Nov 1).
-SKIP_THINKING: set[str] = set()
+# Fields that skip thinking by hand, whatever their cost or fast-pass error. Test questions go on the
+# fast pass alone (Max, Nov 1, from the v10 compare): it matched full System One on format and credit
+# and lost one topic answer of 51, at 0.8 s a question instead of 2.7.
+SKIP_THINKING: set[str] = {"topic", "credit"}
 OFFSET_FIELDS = ("type", "template", "effort", "format", "credit")  # topic's options are per class
 OFFSET_MIN_GAIN = 0.03  # of the field's labeled cells, under cross-validation
 FOLDS = 5
@@ -539,7 +541,8 @@ def plan_field(field: str, recs: list[dict], share_min: float) -> FieldPlan:
     fast_error = sum(r["forward"]["top"] != right(r) for r in recs) / len(recs)
     fixed = field in THINK_STOPS
     # a hand fast line says when to think, so its field doesn't skip thinking by the rule
-    skip = cost == "cheap" and field not in FAST_LINES and (fast_error <= CHEAP_MAX_ERROR or field in SKIP_THINKING)
+    skip = field not in FAST_LINES and (field in SKIP_THINKING
+                                        or (cost == "cheap" and fast_error <= CHEAP_MAX_ERROR))
     used = THINK_STOPS[field] if fixed else think_line
     outs = [(decide(r, fast, used, skip, share_min), r) for r in recs]
     pairs = [(final_probs(r, o), right(r), o.looped) for o, r in outs]
@@ -624,13 +627,13 @@ def field_report(p: FieldPlan, recs: list[dict], share_min: float) -> list[str]:
                    f"({_pct(len(instant), p.n)}). Without the reversed check the line would be "
                    f"{_line(p.fast_forward_only)}, instant on {len(alone)} ({_pct(len(alone), p.n)}).")
     think_note = "" if p.think_data else " (nothing left unsure to calibrate it on)"
+    skip_note = ("" if not p.skip else " In skip_thinking by hand (SKIP_THINKING)." if p.field in SKIP_THINKING
+                 else " In skip_thinking: its fast-pass error is 10% or less.")
     if p.think_fixed:
         out.append(f"  Think line set by hand (THINK_STOPS): {_line(p.think)}. The rule ({rule}) "
-                   f"gives {_line(p.think_rule)}{think_note}.")
+                   f"gives {_line(p.think_rule)}{think_note}.{skip_note}")
     else:
-        out.append(f"  Proposed think line ({rule}): {_line(p.think)}{think_note}."
-                   + ("" if not p.skip else " In skip_thinking: its fast-pass error is 10% or less."
-                      if p.fast_error <= CHEAP_MAX_ERROR else " In skip_thinking by hand (SKIP_THINKING)."))
+        out.append(f"  Proposed think line ({rule}): {_line(p.think)}{think_note}.{skip_note}")
 
     outs = [(decide(r, p.fast, p.think, p.skip, share_min), r) for r in recs]
     tiers = {}

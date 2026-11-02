@@ -1,32 +1,51 @@
 {
   "lines": {
     "type": {
-      "fast": 0.9987,
-      "think": 1.01
+      "fast": 0.99947,
+      "think": 1.01,
+      "temperature": 0.5,
+      "think_temperature": 2.16
     },
     "template": {
-      "fast": 0.9977,
-      "think": 1.01
+      "fast": 0.9949,
+      "think": 1.01,
+      "temperature": 0.5,
+      "think_temperature": 3.35
     },
     "effort": {
-      "fast": 0.988,
-      "think": 1.01
+      "fast": 0.8,
+      "think": 1.01,
+      "temperature": 1.39,
+      "think_temperature": 4.49
     },
     "format": {
-      "fast": 0.64,
-      "think": 0.99
+      "fast": 0.71,
+      "think": 0.9999,
+      "temperature": 1.04,
+      "think_temperature": 1.0
     },
     "topic": {
-      "fast": 0.86,
-      "think": 1.01
+      "fast": 0.75,
+      "think": 0.97,
+      "temperature": 0.99,
+      "think_temperature": 1.0
     },
     "credit": {
-      "fast": 0.86,
-      "think": 0.999
+      "fast": 0.59,
+      "think": 0.999,
+      "temperature": 0.58,
+      "think_temperature": 1.0,
+      "offsets": {
+        "full": 1.884,
+        "partial": 0.416,
+        "none": -1.918,
+        "cant_tell": -0.382
+      }
     }
   },
   "skip_thinking": [
-    "effort",
-    "format"
+    "format",
+    "topic",
+    "credit"
   ]
 }

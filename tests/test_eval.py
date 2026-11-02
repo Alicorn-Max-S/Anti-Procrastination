@@ -104,6 +104,8 @@ def test_hand_set_lines_and_skips(monkeypatch):
     assert effort.fast_rule == 0.6  # what the 10% rule would give, for the report
     worse = recs + [rec(2, probe(0.61, 0))]
     assert not cal.plan_field("format", worse, 0.5).skip
+    assert cal.plan_field("credit", worse, 0.5).skip  # expensive, skipped by hand all the same
+    assert not cal.plan_field("type", worse, 0.5).skip
     monkeypatch.setattr(cal, "SKIP_THINKING", {"format"})
     assert cal.plan_field("format", worse, 0.5).skip  # over 10% fast error, skipped by hand
 

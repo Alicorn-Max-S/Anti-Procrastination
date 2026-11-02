@@ -58,7 +58,8 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "reading, video or podcast. Notes don't count, even when they're turned in or shown to "
                "the teacher"),
         Option("reading", "Reading",
-               "a text to read (a chapter, article or source), maybe with notes or guiding questions. "
+               "a text to read (a chapter, article or source), including articles, news stories or "
+               "data sites to explore from links, maybe with notes or guiding questions. "
                "Notes keep it a reading even when they're turned in or shown to the teacher; written "
                "answers make it Essay or written response"),
         Option("problem_set_or_worksheet", "Problem set or worksheet",
@@ -74,7 +75,8 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "a video or podcast to watch or listen to, maybe with notes (even notes shown to the "
                "teacher), and no written answers to turn in"),
         Option("something_else", "Something else",
-               "anything else: a form, survey, signature, participation grade, test corrections, a "
+               "only these cases: a form, survey, signature, participation grade, test corrections, "
+               "checking your work against a posted answer key (like \"KEY: Unit 2 HW\"), a "
                "class discussion, something to bring to class, a quick reflection exit ticket, a "
                "small check-in on a project, first-day paperwork (a question sheet to fill out and "
                "the syllabus), or organizing your notes or binder, including a review-and-organize "
@@ -82,6 +84,24 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
     ), rules=(
         "A part of a multi-part project stays Project or presentation, even when that part is a "
         "reading.",
+        "Something else is the last resort: pick it only when the item is one of its listed cases. "
+        "When the description is short or missing, go by the title and the class: a topic title in a "
+        "math, science or coding class is a Problem set or worksheet.",
+        "A check-in on a skill or unit (like a Dimensional Analysis Check-In) is a Test or quiz. "
+        "Something else's check-in is about a project's progress or how the student is doing.",
+        "In a data science or coding class, an assignment turned in through an external tool is a "
+        "coding notebook (Problem set or worksheet) unless it says it's an assessment or a project.",
+        "Exercises that practice a skill (a grammar point, vocabulary, a formula) are a Problem set or "
+        "worksheet, even when they're answered in full sentences. Essay or written response is "
+        "writing about a reading, video or podcast, or a piece of writing in its own right.",
+        "A doc to complete about a reading (like a scaffolding doc) counts as written answers. Notes, "
+        "or a note-taking sheet, keep it a Reading.",
+        "Writing a creative piece (a monologue, poem or story), even with a reflection, is Essay or "
+        "written response unless it's performed or presented.",
+        "A group presentation to the class is Project or presentation, even when it's done in one "
+        "class period.",
+        "A set of online activities that's mostly videos to watch is Video or audio, even with an "
+        "online practice at the end: online practice isn't written answers to turn in.",
     ), examples=(
         Example('Advanced Calculus, "Exit Ticket #1: Continuity @ a Point", 5 points, no description',
                 "test_or_quiz", "assignment:19761"),
@@ -118,8 +138,8 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
     Field("template", "Which prep doc template fits best?", (
         Option("document", "Document",
                "a document or linked documents to read through; the usual pick for a reading in a "
-               "humanities class (English or history) that's about the class's subject and read "
-               "outside class, and for a podcast or other audio"),
+               "non-STEM class (like English, history or a language) that's about the class's subject "
+               "and read outside class, and for a podcast or other audio"),
         Option("checklist", "Checklist",
                "steps to tick off one by one; the usual pick for problem sets, worksheets, projects, "
                "journals or responses written on the spot with no prep time, and shorter writing with "
@@ -128,15 +148,32 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "built from the student's graded work and weak spots; always the pick for a test or "
                "quiz (including an exit ticket the student preps for, like a mini quiz) and for labs, "
                "and also for essays (including timed in-class writing like quick writes), "
-               "participation grades, and projects done mainly in class"),
+               "participation grades, journal checks, and projects done mainly in class"),
         Option("cornell", "Cornell",
                "Cornell notes: cue questions beside notes and a summary, for a lesson, a video, or "
-               "any other reading: one done in class, a science or other non-humanities reading, a "
+               "any other reading: one done in class, a science, math or other STEM reading, a "
                "syllabus, or assignment instructions to look over"),
         Option("quick", "Quick task",
                "one small action with nothing to prep: a form, survey (including a post-test survey), "
-               "signature, reflection exit ticket, reminder to submit missing work, or a project idea, "
-               "research question or sign-up"),
+               "signature, reflection exit ticket, reminder to submit missing work, a project idea, "
+               "research question or sign-up, first-day paperwork (a question sheet and the "
+               "syllabus), organizing your notes or binder, checking your work against an answer key, "
+               "or something to bring to class"),
+    ), rules=(
+        "A separate assignment to prepare for a test, essay or discussion (including a "
+        "review-and-organize packet) is Checklist.",
+        "Graded creative writing (a poem, monologue or story) is Dashboard when it's worked on over "
+        "several days or is a major grade, like an essay, and Checklist when it's written at home for "
+        "a short deadline.",
+        "A journal check (a grade on the journal entries so far) is Dashboard.",
+        "A short assignment done in class with no time to prepare is not Dashboard: it's Checklist, "
+        "or Quick task for one small action. Timed writing the student preps for, like an in-class "
+        "essay or a quick write on a case study read beforehand, stays Dashboard.",
+        "Answers to the questions that come with a reading in a non-STEM class (read pages 83-84, "
+        "then answer the questions on page 84) get Document, since the reading is the main work. A "
+        "separate doc to fill in, like a scaffolding doc, gets Checklist.",
+        "When the main work is watching a video, the template is Cornell, even when one short written "
+        "answer is turned in.",
     ), examples=(
         Example('English 10, "Crucible RC 3", 25 points: a reading check, which is a quiz on the reading',
                 "dashboard", "assignment:16054"),
@@ -158,13 +195,15 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
     Field("effort", "How much effort will it take?", (
         Option("one_short_sitting", "One short sitting",
                "a simple assignment, a longer one that was worked on in class or would be finished in "
-               "class, a reflection exit ticket, or one with a small number of questions; a problem "
-               "set is usually short when it's a link to something like Khan Academy or only a few "
-               "questions"),
+               "class, a reflection exit ticket, a journal or diario entry, a project idea or research "
+               "question, something to bring to class, or one with a small number of questions; a "
+               "problem set is short when it was started or handed out in class, is a link to an "
+               "online activity like Khan Academy or Delta Math, or has only a few questions"),
         Option("one_solid_session", "One solid session",
-               "a longer assignment, a lab (even one done in class), a problem set that's a document "
-               "or has many questions, a coding notebook, or a reading that needs annotation or is for "
-               "a non-STEM class"),
+               "a longer assignment, a lab (even one done in class), a problem set or worksheet that "
+               "wasn't started in class and isn't a link or a few questions, a coding notebook, test "
+               "corrections, a single body paragraph of an essay, or a reading that needs annotation "
+               "or is for a non-STEM class (even one read in class)"),
         Option("two_or_three_sessions", "Two or three sessions",
                "spread over two or three sittings, like studying for a quiz, mini-quiz exit ticket, "
                "reading check, pretest or assessment (not a test) or a short project with a few parts"),
@@ -172,18 +211,27 @@ ASSIGNMENT_FIELDS: tuple[Field, ...] = (
                "worked on across many days, like studying for a test/final, an essay, an in-class "
                "essay or writing assessment, a graded discussion, or a long project"),
     ), rules=(
-        "Effort goes by what the item is, not by minutes. A separate assignment to prepare for "
-        "something goes by its own size. For anything the student studies or preps for, the prep "
-        "decides, even when the item has few questions or happens in class: a quiz, reading check or "
-        "mini-quiz exit ticket is Two or three sessions, and so is a small quiz like an examencito; "
-        "a test is Multi-day, and so is an in-class essay or writing assessment, or a graded "
-        "discussion.",
-        "An essay (an assignment called an essay) is Multi-day. A piece of one, like a single body "
-        "paragraph, and shorter writing like a journal, response or poem go by their size.",
-        "A project or presentation is Two or three sessions or Multi-day, by its scale. A piece of "
-        "one that's only a reading, a worksheet or a class session goes by that piece.",
+        "A separate assignment to prepare for a test, essay or discussion (gathering quotes, making a "
+        "plan, a review-and-organize packet) is not that test or essay: it goes by its own size, "
+        "usually One solid session or Two or three sessions, never Multi-day.",
+        "Effort goes by what the item is, not by minutes. For anything the student studies or preps "
+        "for, the prep decides, even when the item has few questions or happens in class: a quiz, "
+        "reading check or mini-quiz exit ticket is Two or three sessions, and so is a small quiz like "
+        "an examencito; a test is Multi-day, and so is an in-class essay or writing assessment, or a "
+        "graded discussion.",
+        "An essay (an assignment called an essay) is Multi-day. A single body paragraph or other "
+        "piece of one is One solid session. A journal or diario entry is usually One short sitting. "
+        "A poem or other creative piece is Two or three sessions, or Multi-day when it's worked on "
+        "over several days or is a major grade.",
+        "A project or presentation is Two or three sessions or Multi-day, by its scale: a whole unit "
+        "project, or one built on collecting and analyzing data, is Multi-day. A piece of one goes by "
+        "that piece: one part of a multi-part project (Part I, Part II) is usually One solid session, "
+        "and a part that's only a reading, a worksheet or a class session goes by what it is.",
         "An assignment that's a link to an online activity (Khan Academy, Delta Math, a form) "
         "usually takes less effort than one that's an attached document or packet.",
+        "Test corrections are One solid session.",
+        "When the description says little, the points hint at the size: an assignment worth a lot "
+        "(like 100 points) is at least Two or three sessions, unless it's a participation grade.",
     ), examples=(
         Example('Advanced Calculus, "IVT & MVT Homework", 5 points: "Complete the handout given to you in '
                 'class"', "one_short_sitting", "assignment:19774"),
@@ -220,6 +268,12 @@ QUESTION_FIELDS: tuple[Field, ...] = (
                "write a given verb (often in parentheses) in the right form; this beats fill in the "
                "blank"),
         Option("diagram", "Diagram", "draw or label a graph or diagram as the answer"),
+    ), rules=(
+        "Format goes by what the question asks, not by how long the student's answer is. Working out "
+        "a result with algebra or arithmetic is Calculation, even when the question also asks for an "
+        "explanation. Explaining a specific result without computing it (like which graph is which, "
+        "and why) is Short answer, even when the answer runs a paragraph. Free response is an open "
+        "prompt with no single right answer, like an essay question.",
     ), examples=(  # made up, so no labeled question is held out of a set this small
         Example('Calculus: "Explain in a complete sentence what the sign of the derivative tells you about '
                 'the function."', "short_answer"),

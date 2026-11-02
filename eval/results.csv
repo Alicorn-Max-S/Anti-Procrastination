@@ -1,61 +1,73 @@
 setup,scope,items,fields,correct,accuracy,seconds_per_item,cost_per_1000_items,instant,thought,guessed,default,loops,cap_hits,clarify,clarify_wrong
-All Spark,all,248,723,642,0.888,5.304,9.0439,,,,,,,,
-All Spark,expensive,,481,443,0.921,,,,,,,,,,
-All Spark,cheap,,242,199,0.8223,,,,,,,,,,
-All Spark,type,,189,174,0.9206,,,,,,,,,,
-All Spark,template,,190,170,0.8947,,,,,,,,,,
-All Spark,effort,,191,149,0.7801,,,,,,,,,,
-All Spark,format,,51,50,0.9804,,,,,,,,,,
-All Spark,topic,,51,50,0.9804,,,,,,,,,,
+All Spark,all,248,723,685,0.9474,7.503,9.8889,,,,,,,,
+All Spark,expensive,,481,463,0.9626,,,,,,,,,,
+All Spark,cheap,,242,222,0.9174,,,,,,,,,,
+All Spark,type,,189,183,0.9683,,,,,,,,,,
+All Spark,template,,190,182,0.9579,,,,,,,,,,
+All Spark,effort,,191,171,0.8953,,,,,,,,,,
+All Spark,format,,51,51,1.0,,,,,,,,,,
+All Spark,topic,,51,49,0.9608,,,,,,,,,,
 All Spark,credit,,51,49,0.9608,,,,,,,,,,
-All Spark,effort within one level,,191,185,0.9686,,,,,,,,,,
-All Spark,assignment items,197,,,,5.551,,,,,,,,,
-All Spark,test_question items,51,,,,4.349,,,,,,,,,
-Base Glimmer,all,248,723,633,0.8755,9.312,2.8452,,,,,,,,
-Base Glimmer,expensive,,481,433,0.9002,,,,,,,,,,
-Base Glimmer,cheap,,242,200,0.8264,,,,,,,,,,
-Base Glimmer,type,,189,175,0.9259,,,,,,,,,,
-Base Glimmer,template,,190,166,0.8737,,,,,,,,,,
-Base Glimmer,effort,,191,151,0.7906,,,,,,,,,,
-Base Glimmer,format,,51,49,0.9608,,,,,,,,,,
+All Spark,effort within one level,,191,190,0.9948,,,,,,,,,,
+All Spark,assignment items,197,,,,8.089,,,,,,,,,
+All Spark,test_question items,51,,,,5.243,,,,,,,,,
+Base Glimmer,all,248,723,670,0.9267,9.129,2.7894,,,,,,,,
+Base Glimmer,expensive,,481,453,0.9418,,,,,,,,,,
+Base Glimmer,cheap,,242,217,0.8967,,,,,,,,,,
+Base Glimmer,type,,189,180,0.9524,,,,,,,,,,
+Base Glimmer,template,,190,175,0.9211,,,,,,,,,,
+Base Glimmer,effort,,191,169,0.8848,,,,,,,,,,
+Base Glimmer,format,,51,48,0.9412,,,,,,,,,,
 Base Glimmer,topic,,51,51,1.0,,,,,,,,,,
-Base Glimmer,credit,,51,41,0.8039,,,,,,,,,,
-Base Glimmer,effort within one level,,191,186,0.9738,,,,,,,,,,
-Base Glimmer,assignment items,197,,,,9.289,,,,,,,,,
-Base Glimmer,test_question items,51,,,,9.399,,,,,,,,,
-"System One, fast pass only",all,248,723,600,0.8299,1.043,0.3187,,,,,,,,
-"System One, fast pass only",expensive,,481,413,0.8586,,,,,,,,,,
-"System One, fast pass only",cheap,,242,187,0.7727,,,,,,,,,,
-"System One, fast pass only",type,,189,165,0.873,,,,,,,,,,
-"System One, fast pass only",template,,190,161,0.8474,,,,,,,,,,
-"System One, fast pass only",effort,,191,138,0.7225,,,,,,,,,,
-"System One, fast pass only",format,,51,49,0.9608,,,,,,,,,,
+Base Glimmer,credit,,51,47,0.9216,,,,,,,,,,
+Base Glimmer,effort within one level,,191,188,0.9843,,,,,,,,,,
+Base Glimmer,assignment items,197,,,,9.075,,,,,,,,,
+Base Glimmer,test_question items,51,,,,9.336,,,,,,,,,
+"System One, fast pass only",all,248,723,642,0.888,1.452,0.4436,,,,,,,,
+"System One, fast pass only",expensive,,481,436,0.9064,,,,,,,,,,
+"System One, fast pass only",cheap,,242,206,0.8512,,,,,,,,,,
+"System One, fast pass only",type,,189,171,0.9048,,,,,,,,,,
+"System One, fast pass only",template,,190,169,0.8895,,,,,,,,,,
+"System One, fast pass only",effort,,191,156,0.8168,,,,,,,,,,
+"System One, fast pass only",format,,51,50,0.9804,,,,,,,,,,
 "System One, fast pass only",topic,,51,49,0.9608,,,,,,,,,,
-"System One, fast pass only",credit,,51,38,0.7451,,,,,,,,,,
-"System One, fast pass only",effort within one level,,191,184,0.9634,,,,,,,,,,
-"System One, fast pass only",assignment items,197,,,,1.102,,,,,,,,,
-"System One, fast pass only",test_question items,51,,,,0.813,,,,,,,,,
-"System One, full",all,248,723,626,0.8658,6.831,2.0874,270,192,181,80,240,6,46,21
-"System One, full",expensive,,481,439,0.9127,,,161,192,48,80,240,6,46,21
-"System One, full",cheap,,242,187,0.7727,,,109,0,133,0,0,0,0,0
-"System One, full",type,,189,174,0.9206,,,76,90,23,0,113,3,23,8
-"System One, full",template,,190,165,0.8684,,,16,71,23,80,94,2,23,13
-"System One, full",effort,,191,138,0.7225,,,60,0,131,0,0,0,0,0
-"System One, full",format,,51,49,0.9608,,,49,0,2,0,0,0,0,0
-"System One, full",topic,,51,50,0.9804,,,46,4,1,0,5,0,0,0
-"System One, full",credit,,51,50,0.9804,,,23,27,1,0,28,1,0,0
-"System One, full",effort within one level,,191,184,0.9634,,,,,,,,,,
-"System One, full",assignment items,197,,,,7.947,,,,,,,,,
-"System One, full",test_question items,51,,,,2.522,,,,,,,,,
-Liquid d1-2B,all,248,723,540,0.7469,0.143,0.0436,,,,,,,,
-Liquid d1-2B,expensive,,481,391,0.8129,,,,,,,,,,
-Liquid d1-2B,cheap,,242,149,0.6157,,,,,,,,,,
-Liquid d1-2B,type,,189,157,0.8307,,,,,,,,,,
-Liquid d1-2B,template,,190,146,0.7684,,,,,,,,,,
-Liquid d1-2B,effort,,191,115,0.6021,,,,,,,,,,
-Liquid d1-2B,format,,51,34,0.6667,,,,,,,,,,
+"System One, fast pass only",credit,,51,47,0.9216,,,,,,,,,,
+"System One, fast pass only",effort within one level,,191,188,0.9843,,,,,,,,,,
+"System One, fast pass only",assignment items,197,,,,1.615,,,,,,,,,
+"System One, fast pass only",test_question items,51,,,,0.823,,,,,,,,,
+"System One, full",all,248,723,667,0.9225,7.101,2.1699,419,155,66,83,219,7,40,15
+"System One, full",expensive,,481,449,0.9335,,,217,140,41,83,181,5,40,15
+"System One, full",cheap,,242,218,0.9008,,,202,15,25,0,38,2,0,0
+"System One, full",type,,189,177,0.9365,,,87,83,19,0,102,1,19,7
+"System One, full",template,,190,175,0.9211,,,35,51,21,83,72,3,21,8
+"System One, full",effort,,191,168,0.8796,,,153,15,23,0,38,2,0,0
+"System One, full",format,,51,50,0.9804,,,49,0,2,0,0,0,0,0
+"System One, full",topic,,51,50,0.9804,,,49,2,0,0,2,0,0,0
+"System One, full",credit,,51,47,0.9216,,,46,4,1,0,5,1,0,0
+"System One, full",effort within one level,,191,189,0.9895,,,,,,,,,,
+"System One, full",assignment items,197,,,,8.543,,,,,,,,,
+"System One, full",test_question items,51,,,,1.533,,,,,,,,,
+"System One, shared chain",all,248,723,668,0.9239,8.206,2.5072,420,151,68,84,217,30,54,17
+"System One, shared chain",expensive,,481,454,0.9439,,,214,129,54,84,183,24,54,17
+"System One, shared chain",cheap,,242,214,0.8843,,,206,22,14,0,34,6,0,0
+"System One, shared chain",type,,189,179,0.9471,,,96,70,23,0,93,11,23,6
+"System One, shared chain",template,,190,175,0.9211,,,23,52,31,84,83,13,31,11
+"System One, shared chain",effort,,191,164,0.8586,,,157,22,12,0,34,6,0,0
+"System One, shared chain",format,,51,50,0.9804,,,49,0,2,0,0,0,0,0
+"System One, shared chain",topic,,51,51,1.0,,,48,3,0,0,3,0,0,0
+"System One, shared chain",credit,,51,49,0.9608,,,47,4,0,0,4,0,0,0
+"System One, shared chain",effort within one level,,191,189,0.9895,,,,,,,,,,
+"System One, shared chain",assignment items,197,,,,9.952,,,,,,,,,
+"System One, shared chain",test_question items,51,,,,1.458,,,,,,,,,
+Liquid d1-2B,all,248,723,566,0.7828,0.202,0.0616,,,,,,,,
+Liquid d1-2B,expensive,,481,405,0.842,,,,,,,,,,
+Liquid d1-2B,cheap,,242,161,0.6653,,,,,,,,,,
+Liquid d1-2B,type,,189,169,0.8942,,,,,,,,,,
+Liquid d1-2B,template,,190,148,0.7789,,,,,,,,,,
+Liquid d1-2B,effort,,191,124,0.6492,,,,,,,,,,
+Liquid d1-2B,format,,51,37,0.7255,,,,,,,,,,
 Liquid d1-2B,topic,,51,51,1.0,,,,,,,,,,
 Liquid d1-2B,credit,,51,37,0.7255,,,,,,,,,,
-Liquid d1-2B,effort within one level,,191,174,0.911,,,,,,,,,,
-Liquid d1-2B,assignment items,197,,,,0.159,,,,,,,,,
-Liquid d1-2B,test_question items,51,,,,0.08,,,,,,,,,
+Liquid d1-2B,effort within one level,,191,182,0.9529,,,,,,,,,,
+Liquid d1-2B,assignment items,197,,,,0.232,,,,,,,,,
+Liquid d1-2B,test_question items,51,,,,0.086,,,,,,,,,

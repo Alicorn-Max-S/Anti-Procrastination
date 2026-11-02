@@ -31,21 +31,54 @@ DESCRIPTION_CHARS = 1200
 # of Max's Nov 1 rules (spec, Status section).
 TEMPLATE_DEFAULTS = {
     "test_or_quiz": "Dashboard",
-    "essay_or_written_response": "Dashboard, including timed in-class writing like quick writes; "
-                                 "Checklist for journals or responses written on the spot, and "
-                                 "shorter writing with a clear list of requirements",
-    "reading": "Document if it's in a humanities class (English or history), about the class's "
-               "subject and read outside class; otherwise Cornell (a reading done in class, a science "
-               "or other reading, a syllabus, assignment instructions)",
+    "essay_or_written_response": "Dashboard for an essay, timed in-class writing like quick writes, "
+                                 "and creative writing worked on over several days or for a major "
+                                 "grade; Checklist for journals, responses written on the spot, "
+                                 "creative writing done at home for a short deadline, and shorter "
+                                 "writing with a clear list of requirements; Document for answers to "
+                                 "the questions that come with a reading in a non-STEM class; Cornell "
+                                 "when the main work is watching a video",
+    "reading": "Cornell if it's read in class; Document if it's for a non-STEM class (like English, "
+               "history or a language), about the class's subject and read outside class; otherwise "
+               "Cornell (a science or math reading, a syllabus, assignment instructions)",
     "problem_set_or_worksheet": "Checklist",
     "lab_report": "Dashboard",
-    "project_or_presentation": "a piece that's mostly reading follows the reading rule (Document if "
-                               "it's in a humanities class, about the class's subject and read outside "
-                               "class, otherwise Cornell); otherwise Checklist, or Dashboard if done "
-                               "mainly in class",
+    "project_or_presentation": "a part centered on a reading follows the reading rule, even when it's "
+                               "discussed or presented in class; a class discussion, or a project done "
+                               "mainly in class, is Dashboard; otherwise Checklist",
     "video_or_audio": "Cornell for a video, Document for a podcast or other audio",
-    "something_else": "Quick task if it's one small action with nothing to prep, Dashboard for a "
-                      "participation grade, otherwise Checklist",
+    "something_else": "Quick task if it's one small action with nothing to prep; Dashboard for a "
+                      "participation grade or a journal check; otherwise Checklist, including test "
+                      "corrections and getting ready for a test, essay or discussion",
+}
+
+# The effort hint, the same way: how long each assignment type usually takes, in the words of Max's
+# rules. System One's effort skips thinking, so this next to its type answer is most of what it goes on.
+EFFORT_DEFAULTS = {
+    "test_or_quiz": "Two or three sessions for a quiz, reading check, mini quiz, check-in or "
+                    "assessment; Multi-day for a test or final",
+    "essay_or_written_response": "Multi-day for an essay or an in-class essay or writing assessment; "
+                                 "One solid session for a single body paragraph; One short sitting "
+                                 "for a journal or diario entry; a poem or other creative piece is Two "
+                                 "or three sessions, or Multi-day when it's worked on over several days "
+                                 "or is a major grade; anything else by its size",
+    "reading": "One solid session for a non-STEM reading or one that needs annotation, even one read "
+               "in class; One short sitting only for a short reading in a STEM class",
+    "problem_set_or_worksheet": "One solid session, unless it was started or handed out in class, is "
+                                "a link to an online activity (Khan Academy, Delta Math) or has only a "
+                                "few questions: then One short sitting. A coding notebook is One solid "
+                                "session",
+    "lab_report": "One solid session",
+    "project_or_presentation": "Multi-day for a whole unit project or one built on collecting and "
+                               "analyzing data, otherwise Two or three sessions; one part of a project "
+                               "goes by that part, usually One solid session",
+    "video_or_audio": "One short sitting for a video or a set of short ones; One solid session for a "
+                      "podcast episode or other long audio",
+    "something_else": "One short sitting for a form, survey, exit ticket, participation grade, sign-up, "
+                      "research question, checking work against an answer key, something to bring to "
+                      "class or other small task; One solid "
+                      "session for test corrections; One solid session or Two or three sessions for "
+                      "getting ready for a test, essay or discussion; Multi-day for a graded discussion",
 }
 
 # Types whose template is never in doubt: with TEMPLATE_FROM_TYPE on, the decider skips the template
@@ -87,9 +120,17 @@ def examples_block() -> str:
 SYSTEM = f"{ROLE}\n\n{examples_block()}\n\nReasoning strength: low."
 
 
+def _hint(what: str, defaults: dict[str, str]) -> str:
+    lines = "\n".join(f"- {_label('type', t)}: {line}" for t, line in defaults.items())
+    return f"Usual {what} by assignment type:\n{lines}"
+
+
 def template_hint() -> str:
-    lines = "\n".join(f"- {_label('type', t)}: {line}" for t, line in TEMPLATE_DEFAULTS.items())
-    return f"Usual template by assignment type:\n{lines}"
+    return _hint("template", TEMPLATE_DEFAULTS)
+
+
+def effort_hint() -> str:
+    return _hint("effort", EFFORT_DEFAULTS)
 
 
 def option_text(o: Option) -> str:
@@ -129,6 +170,8 @@ def choice_for(field: Field, topics: list[str] | None = None) -> Choice:
     question = field.question
     if field.key == "template":
         question = f"{question}\n{template_hint()}"
+    elif field.key == "effort":
+        question = f"{question}\n{effort_hint()}"
     return Choice(field.key, question, options, tuple(range(len(options))), field.per_class)
 
 

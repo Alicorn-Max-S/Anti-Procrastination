@@ -4,12 +4,12 @@ An assignment goes in two stages: type, then template and effort with the type a
 
 The tiers: `instant` when the forward and reversed fast-pass probes agree and clear the fast line;
 `thought` when a thinking probe clears the think line, or Glimmer closes its thinking on the fast
-pass's own answer; `guessed` when thinking ends on another answer or runs to the cap, and for a cheap
-field in skip_thinking; `default` for a template the type settles (prompts.TEMPLATE_FROM_TYPE).
+pass's own answer; `guessed` when thinking ends on another answer or runs to the cap, and for a field
+in skip_thinking (format, topic and credit, so test questions go on the fast pass alone); `default`
+for a template the type settles (prompts.TEMPLATE_FROM_TYPE).
 
 `clarify` marks what goes on the student's clarify list: a guessed type or template. A guessed
-effort only gets the badge, and topic and credit keep thinking's answer (when it disagrees with the
-fast pass on credit, thinking is right 7 times in 9).
+effort only gets the badge, and topic and credit never go on it.
 
 `calibrated_confidence` is the decision's chance of being right: its last probe at the field's
 fitted temperature for that kind of probe, fast pass or thinking (decisions/lines.json).
