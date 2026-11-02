@@ -51,7 +51,7 @@ $("save").addEventListener("click", async () => {
     const failed = run?.failed?.length || 0;
     show($("result"), `Connected. Saved ${run?.saved?.length || 0} file(s)${failed ? `, ${failed} couldn't be fetched (see the toolbar popup)` : ""}.`, "ok");
   } catch (e) {
-    show($("result"), `Couldn't reach ${server}. Is Start Helper running? (${e.message || e})`, "warn");
+    show($("result"), `Couldn't reach ${server}. Is warmstart running? (${e.message || e})`, "warn");
   }
 });
 

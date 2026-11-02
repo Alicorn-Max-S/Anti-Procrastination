@@ -1,34 +1,40 @@
+/* warmstart's zinc greys and ink buttons (docs/brand.md); links in a Clay that passes 4.5:1, and
+   warnings in red, never the brand color. */
 :root {
   --bg: #ffffff;
-  --fg: #1d1d1f;
-  --muted: #6b6b70;
-  --line: #e2e2e6;
-  --accent: #2f6fde;
+  --fg: #18181B;
+  --muted: #52525B;
+  --line: #E4E4E7;
+  --accent: #18181B;
+  --accent-ink: #ffffff;
+  --link: #9B5441;
   --ok: #2e7d32;
-  --warn: #b25e00;
+  --warn: #a11f17;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1c1c1f;
-    --fg: #ececf0;
-    --muted: #a0a0a8;
-    --line: #34343a;
-    --accent: #7aa7ff;
+    --bg: #18181B;
+    --fg: #F4F4F5;
+    --muted: #A1A1AA;
+    --line: #3F3F46;
+    --accent: #F4F4F5;
+    --accent-ink: #18181B;
+    --link: #CE9180;
     --ok: #7cc47f;
-    --warn: #f0a24a;
+    --warn: #FF8077;
   }
 }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 500 14px/1.45 'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
 }
 h1 { font-size: 16px; margin: 0 0 10px; }
 h2 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
 p { margin: 6px 0; }
-a { color: var(--accent); }
+a { color: var(--link); }
 ul { margin: 4px 0; padding-left: 18px; }
 li { margin: 2px 0; }
 button {
@@ -37,11 +43,11 @@ button {
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   cursor: pointer;
   white-space: nowrap;
 }
-button.quiet { background: transparent; color: var(--accent); }
+button.quiet { background: transparent; color: var(--fg); }
 button:disabled { opacity: .5; cursor: default; }
 input, select {
   font: inherit;

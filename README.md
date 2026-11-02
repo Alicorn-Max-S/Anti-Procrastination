@@ -1,8 +1,10 @@
-# Start Helper
+# warmstart
+
+**Less staring. More starting.** We do the warm-up and wake-up, so you can get to work.
 
 Planners help you plan; this helps you start. It turns every Canvas assignment into a prep card with the first step already decided, pings you at start time, and re-plans when you miss it. When a quiz or test is coming, the card is a short practice set built from your graded tests, aimed at the topics and question types you miss.
 
-Built for the Meta AI developer hackathon. See `CLAUDE.md` for the plan.
+Built for the Meta AI developer hackathon. See `CLAUDE.md` for the plan and `docs/brand.md` for the name, copy, colors and logo.
 
 ## Setup
 
@@ -65,7 +67,7 @@ The clock bar under the header sets a **simulated clock** (`clock.py`). Jumping 
 | `app/push.py` | Web push (VAPID) |
 | `app/db.py`, `app/models.py`, `app/config.py` | SQLite layer, shared types, settings |
 | `app/demo.py` | Fabricated demo data (no real names or grades) |
-| `static/` | The single web page (`prepdoc.js` draws the prep docs), PWA manifest, service worker, icons |
+| `static/` | The single web page (`prepdoc.js` draws the prep docs), PWA manifest, service worker, icons, and the logo SVGs in `static/brand/` |
 | `extension/`, `app/browser_files.py` | Chrome extension that fetches school-only Google files with your sign-in, and the server side it talks to |
 | `decider/` | System One decider: a separate FastAPI process (`python -m decider`, port 8090) that answers the multiple-choice decisions with local Muse Glimmer through llama-server. Not wired into the app yet |
 | `decisions/fields.py` | The decision fields and option order, shared by the labelling page and the decider |

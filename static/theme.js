@@ -4,17 +4,24 @@
 // every text token is pushed until it passes WCAG AA (4.5:1).
 // Nov 1 redesign: the page draws each class in a muted version of its color (`muted`), so the
 // classes sit together on a black-and-white page. The server still stores `hex`.
+// Nov 2 warmstart brand (docs/brand.md): Clay is warmstart's own color (the shell, the start-time
+// check-in, the block that's on now) and the classes only label their own class and prep doc. So
+// the muted colors are quieter (OKLCH chroma about 0.05), red and orange are moved off Clay's hue,
+// and the neutrals are zinc. deriveTheme(BRAND.accent) gives the Clay version of every token.
 
 const SUBJECT_COLORS = [
-  { id: "blue", name: "Blue", hex: "#3D5AFE", muted: "#6C7FA6" }, // default
-  { id: "purple", name: "Purple", hex: "#7C3AED", muted: "#8A7AA8" },
-  { id: "pink", name: "Pink", hex: "#D6409F", muted: "#B07A95" },
-  { id: "red", name: "Red", hex: "#E5484D", muted: "#B86B66" },
-  { id: "orange", name: "Orange", hex: "#F0812A", muted: "#C48A5E" },
-  { id: "yellow", name: "Yellow", hex: "#D9A21B", muted: "#B89A55" },
-  { id: "green", name: "Green", hex: "#2E9E5B", muted: "#6E9A7A" },
-  { id: "teal", name: "Teal", hex: "#0E9AA7", muted: "#5F8F96" },
+  { id: "blue", name: "Blue", hex: "#3D5AFE", muted: "#677C99" }, // default
+  { id: "purple", name: "Purple", hex: "#7C3AED", muted: "#87799A" },
+  { id: "pink", name: "Pink", hex: "#D6409F", muted: "#A1798A" },
+  { id: "red", name: "Red", hex: "#E5484D", muted: "#936567" },
+  { id: "orange", name: "Orange", hex: "#F0812A", muted: "#95745C" },
+  { id: "yellow", name: "Yellow", hex: "#D9A21B", muted: "#928A63" },
+  { id: "green", name: "Green", hex: "#2E9E5B", muted: "#6D8B72" },
+  { id: "teal", name: "Teal", hex: "#0E9AA7", muted: "#5B8086" },
 ];
+
+/** warmstart's Clay palette (style.css has the same values as --ws-* tokens). */
+const BRAND = { accent: "#B9624A", stop2: "#C97E45", tint: "#F4E6E2", light: "#CE9180", deep: "#55342D" };
 
 const DEFAULT_SUBJECT = "#3D5AFE";
 
@@ -27,9 +34,10 @@ function mutedSubject(hex) {
 /** Watch-out is always this red, whatever the subject color. */
 const WATCH_OUT_RED = "#E0362C";
 
+// Zinc greys (no blue tint). Dark mode sits on the brand's dark surface, #18181B.
 const NEUTRALS = {
-  light: { page: "#FFFFFF", line: "#E4E4E1", tile: "#F4F4F2", fill: "#E8E8E5", text: "#141414", text2: "#474747", muted: "#5F5F5F", field: "#FFFFFF", ctrl: "#8A8A8F" },
-  dark: { page: "#0A0A0A", line: "#5A5A5A", tile: "#161616", fill: "#2A2A2A", text: "#F2F2F0", text2: "#BDBDBD", muted: "#9A9A9A", field: "#0F0F0F", ctrl: "#76767C" },
+  light: { page: "#FFFFFF", line: "#E4E4E7", tile: "#F4F4F5", fill: "#E4E4E7", text: "#18181B", text2: "#3F3F46", muted: "#52525B", field: "#FFFFFF", ctrl: "#84848D" },
+  dark: { page: "#18181B", line: "#52525B", tile: "#27272A", fill: "#3F3F46", text: "#F4F4F5", text2: "#D4D4D8", muted: "#A1A1AA", field: "#111113", ctrl: "#71717A" },
 };
 
 // ---------- color math ----------
@@ -71,23 +79,30 @@ function deriveTheme(subjectHex, mode) {
   const dark = mode === "dark";
   const n = NEUTRALS[mode];
   const subject = mutedSubject(subjectHex);
+  const brand = subject === BRAND.accent;
 
-  // Soft tint.
-  const soft = dark ? mix(subject, "#000000", 0.17) : mix(subject, "#FFFFFF", 0.22);
+  // Soft tint: a light wash of the class (18%), or the brand's own tint (16% Clay). Dark mode
+  // mixes into the page, which is a dark grey and not black.
+  const soft = dark ? mix(subject, n.page, 0.2) : brand ? BRAND.tint : mix(subject, "#FFFFFF", 0.18);
 
-  // "Soft tone": the subject pulled toward the page, then pushed back until readable.
-  const mid = dark ? mix(subject, "#000000", 0.5) : mix(subject, "#FFFFFF", 0.55);
-  const softText = ensure(mid, soft, 4.5, n.text);
+  // "Soft tone": the subject pulled toward the page, then pushed back until readable. Clay starts
+  // from itself (Clay light in dark mode) and darkens toward its own deep tone, not toward the
+  // ink, so its text and Start buttons stay clay instead of going grey-brown.
+  const mid = brand ? (dark ? BRAND.light : BRAND.accent) : dark ? mix(subject, n.page, 0.5) : mix(subject, "#FFFFFF", 0.55);
+  const toward = brand && !dark ? BRAND.deep : n.text;
+  const softText = ensure(mid, soft, 4.5, toward);
   // Dots and bars. The muted colors are already mid-tone, so light mode draws them as they are.
-  const graphic = dark ? mix(subject, "#FFFFFF", 0.45) : subject;
+  const graphic = dark ? (brand ? BRAND.light : mix(subject, "#FFFFFF", 0.45)) : subject;
   const softRing = dark ? mix(softText, soft, 0.55) : "transparent";
 
-  let accentText = ensure(mid, n.page, 4.5, n.text);
-  accentText = ensure(accentText, n.tile, 4.5, n.text);
-  accentText = ensure(accentText, soft, 4.5, n.text);
+  let accentText = ensure(mid, n.page, 4.5, toward);
+  accentText = ensure(accentText, n.tile, 4.5, toward);
+  accentText = ensure(accentText, soft, 4.5, toward);
 
-  const warnBg = dark ? mix(WATCH_OUT_RED, "#000000", 0.32) : mix(WATCH_OUT_RED, "#FFFFFF", 0.34);
-  const warnText = ensure(WATCH_OUT_RED, warnBg, 4.5, n.text);
+  const warnBg = dark ? mix(WATCH_OUT_RED, n.page, 0.32) : mix(WATCH_OUT_RED, "#FFFFFF", 0.34);
+  // Dark mode lifts the red toward a light red, not toward white, so it stays a clear red and can't
+  // be mistaken for Clay light (#CE9180) next to it.
+  const warnText = ensure(WATCH_OUT_RED, warnBg, 4.5, dark ? "#FF8A80" : n.text);
 
   return {
     ...n,

@@ -1,9 +1,11 @@
 // Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "start-helper-v7";
-const SHELL = ["/", "/static/app.js", "/static/prepdoc.js", "/static/theme.js", "/static/style.css", "/static/prepdoc.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png"];
+const CACHE = "warmstart-v8";
+const SHELL = ["/", "/static/app.js", "/static/prepdoc.js", "/static/theme.js", "/static/style.css", "/static/prepdoc.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png", "/static/icons/badge-96.png", "/static/brand/app-icon.svg"];
 const ICON = "/static/icons/icon-192.png";
+// The status-bar badge: Android draws only its alpha, so it is the white mark on transparent.
+const BADGE = "/static/icons/badge-96.png";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -50,7 +52,7 @@ const ACTIONS = [
 // the first two. A missed start stays on screen until answered, and a reminder alerts again under
 // the same tag. app.js's notifyOptions matches this for the notifications the page shows.
 function options(data) {
-  const opts = { body: data.body, tag: data.tag || undefined, icon: ICON, badge: ICON, data };
+  const opts = { body: data.body, tag: data.tag || undefined, icon: ICON, badge: BADGE, data };
   if (!data.block_id) return opts;
   const missed = data.kind === "missed";
   return {
@@ -63,7 +65,7 @@ function options(data) {
 }
 
 self.addEventListener("push", (event) => {
-  let data = { title: "Time to start", body: "Open Start Helper.", url: "/" };
+  let data = { title: "Time to start", body: "Open warmstart.", url: "/" };
   try {
     if (event.data) data = { ...data, ...event.data.json() };
   } catch {
@@ -84,7 +86,7 @@ async function answeredElsewhere(data) {
   const stale = (await self.registration.getNotifications()).filter((n) => (data.clear || []).includes(n.tag));
   stale.slice(1).forEach((n) => n.close());
   if (stale.length) {
-    await self.registration.showNotification(data.title, { body: data.body, tag: stale[0].tag, silent: true, icon: ICON, badge: ICON, data: { url: "/" } });
+    await self.registration.showNotification(data.title, { body: data.body, tag: stale[0].tag, silent: true, icon: ICON, badge: BADGE, data: { url: "/" } });
   }
   await tellPages({ type: "answered" });
 }

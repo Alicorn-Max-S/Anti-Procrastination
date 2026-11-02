@@ -366,18 +366,20 @@ function previewText(r) {
   return parts.join(" ");
 }
 
-// The "do this now" box, tinted in the class's color: a tag, the class, the assignment, then the
-// first step (a ping) or when it was planned (a miss), and the buttons.
+// The "do this now" box: the start-time wake-up, so it's in warmstart's Clay (a miss sits on grey,
+// style.css), with the class only on its dot. A tag, the class, the assignment, then the first step
+// (a ping) or when it was planned (a miss), and the buttons.
 function checkinBox(b) {
   const missed = b.status === "missed";
   const box = el("div", `checkin${missed ? " missed" : ""}`);
   box.id = `checkin-${b.id}`;
-  pdPaint(box, classColor(b.assignment_id));
+  pdPaint(box, BRAND.accent);
   box.append(el("span", "checkin-tag", missed ? "Missed start" : "Time to start"));
   const meta = [b.course, PD_KIND_NAMES[b.kind]].filter(Boolean).join(" · ");
   if (meta) {
     const course = el("p", "checkin-course");
     const dot = el("span", "dot");
+    dot.style.background = pdGraphic(classColor(b.assignment_id));
     dot.setAttribute("aria-hidden", "true");
     course.append(dot, document.createTextNode(meta));
     box.append(course);
@@ -503,17 +505,18 @@ function renderWeek() {
 const BLOCK_STATUS = { pinged: "Now", started: "Started", done: "✓ Done", missed: "Missed" };
 
 // One block: time, name, its class (dot in the class color), and its status. The one happening now
-// is tinted in the class color.
+// (pinged or started) is tinted in warmstart's Clay, like the check-in box; its dot keeps the class.
 function blockEl(b) {
   const classes = ["block", b.status];
   if (b.at_risk) classes.push("risk");
   if (movedIds.has(b.id)) classes.push("moved");
   const n = el("div", classes.join(" "));
-  pdPaint(n, classColor(b.assignment_id));
+  pdPaint(n, b.status === "pinged" || b.status === "started" ? BRAND.accent : classColor(b.assignment_id));
   n.append(el("div", "t", `${fmtTime(new Date(b.start))}–${fmtTime(new Date(b.end))}`), el("div", "n", b.name));
   if (b.course) {
     const c = el("div", "c");
     const dot = el("span", "dot");
+    dot.style.background = pdGraphic(classColor(b.assignment_id));
     dot.setAttribute("aria-hidden", "true");
     c.append(dot, document.createTextNode(b.course));
     n.append(c);
@@ -1365,7 +1368,7 @@ function deviceName() {
 }
 
 // Firefox on Android gets pushes through Mozilla's push server, which hands them to the phone at
-// normal priority whatever urgency Start Helper asks for. Android holds those while the phone
+// normal priority whatever urgency warmstart asks for. Android holds those while the phone
 // sleeps, so a ping shows up when the student next opens the phone. Chrome takes the high urgency.
 const PUSH_LATE_HERE = deviceName() === "Firefox on Android";
 const PUSH_LATE_HELP =
@@ -1460,7 +1463,7 @@ async function testNotification() {
       const r = await post("/api/push/test");
       if (r.sent) return toast(`Test sent by push. ${PUSH_LATE_HERE ? PUSH_LATE_HELP : help}`, PUSH_LATE_HERE ? 12000 : 9000);
     }
-    const shown = await showLocalNotification("Start Helper", { body: "Notifications work.", tag: "test", data: { url: "/" } });
+    const shown = await showLocalNotification("warmstart", { body: "Notifications work.", tag: "test", data: { url: "/" } });
     toast(shown ? `Test notification shown. ${help}` : "The browser refused to show a notification.", 9000);
   } catch (e) {
     toast(e.message);
@@ -1486,7 +1489,7 @@ function notifyOptions(b, renotify) {
 // Through the service worker when there is one (needed on Android and for the buttons), else the
 // page's own (no buttons there).
 async function showLocalNotification(title, opts) {
-  const full = { icon: "/static/icons/icon-192.png", badge: "/static/icons/icon-192.png", ...opts };
+  const full = { icon: "/static/icons/icon-192.png", badge: "/static/icons/badge-96.png", ...opts };
   try {
     const reg = await swReady;
     if (reg) {
@@ -1564,10 +1567,11 @@ async function closeAnswered() {
 }
 
 // The tab title counts check-ins, and flashes the missed start's name while one is waiting.
+const PAGE_TITLE = "warmstart · Less staring. More starting."; // as in index.html
 let titleTimer = null;
 let titleFlip = false;
 function updateTitle() {
-  const base = state.checkin.length ? `(${state.checkin.length}) Start Helper` : "Start Helper";
+  const base = state.checkin.length ? `(${state.checkin.length}) ${PAGE_TITLE}` : PAGE_TITLE;
   const miss = state.checkin.find((b) => b.status === "missed");
   if (!miss) {
     clearInterval(titleTimer);
