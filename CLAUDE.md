@@ -1,6 +1,6 @@
-# Start Helper
+# warmstart
 
-Planners help you plan; this helps you start. Start Helper turns every Canvas assignment into a prep card with the first step already decided, pings the student at start time, and re-plans when they miss it. When a quiz or test is coming, the card is a short practice set built from the student's uploaded graded tests, aimed at the topics and question types they miss.
+Planners help you plan; this helps you start. warmstart turns every Canvas assignment into a prep card with the first step already decided, pings the student at start time, and re-plans when they miss it. When a quiz or test is coming, the card is a short practice set built from the student's uploaded graded tests, aimed at the topics and question types they miss.
 
 One student model, built from Canvas comments, rubric scores and graded tests, feeds every card's "watch out for" line. That is what makes this one tool instead of a planner with a study app attached.
 
@@ -61,6 +61,7 @@ When behind, drop in this order. Rungs 1 to 5 are already cut.
 - Canvas ingest is token only.
 - Cards live on the in-tool web page, one layout per card type unless there is slack.
 - Demo data is censored real classes (`test_data/`), unless a Free-for-Teacher sandbox course is needed for a live "teacher posts an assignment" moment.
+- The name is warmstart, lowercase even at the start of a sentence, and the palette is Clay with its gradient. Read `docs/brand.md` before touching branding, copy, colors, icons or page metadata. Clay marks warmstart itself (shell, icons, the start-time check-in); a class color only labels its own class and prep doc; red is only for warnings.
 
 ## Stack and APIs
 

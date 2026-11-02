@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="warmstart">
+  <defs>
+    <linearGradient id="ws-tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#B9624A"/>
+      <stop offset="1" stop-color="#C97E45"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="122" fill="url(#ws-tile)"/>
+  <g transform="translate(85.333 85.333) scale(7.1111)">
+    <circle cx="24" cy="24" r="16" fill="none" stroke="#FFFFFF" stroke-opacity="0.4" stroke-width="5"/>
+    <path d="M24 8 A16 16 0 0 1 37.86 32" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/>
+    <path d="M20.5 17.5 L31 24 L20.5 30.5 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2.5" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -444,7 +444,7 @@ def _suffix(data: bytes, filename: str) -> str:
         raise UploadError("a web page, not a file (probably a Google sign-in or error page)")
     if Path(filename).suffix.lower() == ".txt":
         return ".txt"
-    raise UploadError("not a file type Start Helper can read")
+    raise UploadError("not a file type warmstart can read")
 
 
 class _PageText(HTMLParser):
@@ -513,7 +513,7 @@ def _from_page(r: Ref, data: bytes) -> tuple[str, bytes]:
 
 
 def _accept(conn: sqlite3.Connection, url: str, assignment_id: int | None, now: datetime) -> tuple[Ref, list[int]]:
-    """Check an upload is for a file Start Helper asked for. Returns its ref and the assignments
+    """Check an upload is for a file warmstart asked for. Returns its ref and the assignments
     it belongs to."""
     r = ref(url)
     if r is None:

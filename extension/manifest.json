@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Start Helper files",
+  "name": "warmstart files",
   "version": "0.1.0",
-  "description": "Fetches the school Google Docs, Slides and Drive files your Canvas assignments link to, with your own sign-in, and sends them to your Start Helper server.",
+  "description": "Fetches the school Google Docs, Slides and Drive files your Canvas assignments link to, with your own sign-in, and sends them to your warmstart server.",
   "icons": { "16": "icons/icon.png", "48": "icons/icon.png", "128": "icons/icon.png" },
   "background": { "service_worker": "background.js", "type": "module" },
-  "action": { "default_popup": "popup.html", "default_title": "Start Helper files" },
+  "action": { "default_popup": "popup.html", "default_title": "warmstart files" },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "permissions": ["storage", "alarms"],
   "host_permissions": [

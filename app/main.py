@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
         task.cancel()
 
 
-app = FastAPI(title="Start Helper", lifespan=lifespan)
+app = FastAPI(title="warmstart", lifespan=lifespan)
 
 
 def get_conn():
@@ -422,7 +422,7 @@ def _answered_push(tags: list[str], body: str, skip: str) -> None:
     missed-start notification still showing there for a quiet one. Runs after the response."""
     conn = db.connect()
     try:
-        push.send_ping(conn, "Start Helper", body, tag=tags[0], extra={"kind": "answered", "clear": tags}, skip=skip)
+        push.send_ping(conn, "warmstart", body, tag=tags[0], extra={"kind": "answered", "clear": tags}, skip=skip)
     finally:
         conn.close()
 
@@ -703,7 +703,7 @@ def push_error(body: PushErrorIn, conn=Depends(get_conn)) -> dict:
 @app.post("/api/push/test")
 def push_test(conn=Depends(get_conn)) -> dict:
     """Push a test notification to every stored subscription. `sent` < `devices` means some failed."""
-    sent = push.send_ping(conn, "Start Helper", "Push notifications work.", "/", tag="test")
+    sent = push.send_ping(conn, "warmstart", "Push notifications work.", "/", tag="test")
     return {"sent": sent, "devices": len(db.list_subscriptions(conn))}
 
 

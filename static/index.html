@@ -4,14 +4,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#1c1c1c" />
-    <title>Start Helper</title>
+    <meta name="theme-color" content="#18181B" />
+    <title>warmstart · Less staring. More starting.</title>
+    <meta name="description" content="We do the warm-up and wake-up, so you can get to work." />
+    <meta property="og:title" content="warmstart · Less staring. More starting." />
+    <meta property="og:description" content="We do the warm-up and wake-up, so you can get to work." />
     <link rel="manifest" href="/static/manifest.webmanifest" />
-    <link rel="icon" href="/static/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/static/icons/icon-192.png" />
+    <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32" />
+    <link rel="icon" href="/static/brand/app-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" />
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/prepdoc.css" />
   </head>
@@ -43,9 +47,15 @@
 
     <header class="topbar">
       <div class="topbar-left">
+        <!-- The small lockup: the mark (hidden from screen readers, the wordmark names it) and the
+             wordmark as live text. style.css colors the mark for light and dark. -->
         <div class="brand">
-          <img src="/static/icons/icon-192.png" alt="" width="32" height="32" />
-          <span>Start Helper</span>
+          <svg class="ws-mark" width="28" height="28" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+            <circle class="track" cx="24" cy="24" r="16" fill="none" stroke-width="5" />
+            <path class="arc" d="M24 8 A16 16 0 0 1 37.86 32" fill="none" stroke-width="5" stroke-linecap="round" />
+            <path class="play" d="M20.5 17.5 L31 24 L20.5 30.5 Z" stroke-width="2.5" stroke-linejoin="round" />
+          </svg>
+          <span class="wordmark">warmstart</span>
         </div>
         <nav class="tabs" role="tablist" aria-label="Pages">
           <button role="tab" data-tab="cards" aria-selected="true">Assignments</button>

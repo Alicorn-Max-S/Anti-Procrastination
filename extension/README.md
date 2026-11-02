@@ -1,9 +1,9 @@
-# Start Helper files (Chrome extension)
+# warmstart files (Chrome extension)
 
-Most assignments link to Google Docs, Slides and Drive files shared only inside your school's Google domain. The Start Helper server can't open those, because it isn't signed in to Google. This extension runs in your normal Chrome, where you're already signed in to your school account. It downloads those files and sends them to your Start Helper server, and cards get rebuilt with what's in them.
+Most assignments link to Google Docs, Slides and Drive files shared only inside your school's Google domain. The warmstart server can't open those, because it isn't signed in to Google. This extension runs in your normal Chrome, where you're already signed in to your school account. It downloads those files and sends them to your warmstart server, and cards get rebuilt with what's in them.
 
 - It only fetches Google files that your upcoming Canvas assignments link to (the server gives it the list), plus your own Google Assignments copy.
-- It only sends files to the Start Helper server you set, with your key.
+- It only sends files to the warmstart server you set, with your key.
 - It never reads, copies or stores your Google cookies. Chrome adds your sign-in to Google requests by itself.
 - When a teacher turned off downloading on a Doc, Slides or Sheet, it reads the doc's page view instead and sends that text. The card's source says it was read from the page view. Drive files (PDFs, Word files) with downloading off can't be read that way: the card says "the teacher turned off downloading", and you open them yourself.
 
@@ -18,20 +18,20 @@ Use the Chrome profile where you're signed in to your school Google account.
 
 ## Install (once)
 
-1. Start Start Helper as usual (for example `uvicorn app.main:app --reload --port 8001`).
-2. In a second terminal, in the Start Helper folder with the venv active, print the extension key:
+1. Start warmstart as usual (for example `uvicorn app.main:app --reload --port 8001`).
+2. In a second terminal, in the warmstart folder with the venv active, print the extension key:
    ```
    python -m app.browser_files key
    ```
    It prints a line of random letters. Copy it. It's the same every time you run this.
-3. In Chrome, go to `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder inside the Start Helper folder.
-4. A **Start Helper files** settings tab opens (if it doesn't: click the extension's **Details** → **Extension options**). Fill in:
-   - **Start Helper server**: the address you open Start Helper at, e.g. `http://localhost:8001`.
+3. In Chrome, go to `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder inside the warmstart folder.
+4. A **warmstart files** settings tab opens (if it doesn't: click the extension's **Details** → **Extension options**). Fill in:
+   - **warmstart server**: the address you open warmstart at, e.g. `http://localhost:8001`.
    - **Key**: what step 2 printed.
    - **School Google account**: your school email, only if this Chrome is signed in to more than one Google account.
 5. Click **Save and test**. You should see **Connected. Saved N file(s)…** within a minute or so. A "couldn't be fetched" count is fine; the popup says why for each one.
 6. In the box under it, click **Allow Canvas tabs** and accept. This lets the extension spot your Google Assignments copies (below). It only reads the address of Canvas tabs.
-7. Pin it: puzzle-piece icon in the toolbar → pin **Start Helper files**.
+7. Pin it: puzzle-piece icon in the toolbar → pin **warmstart files**.
 
 ## Using it
 
@@ -49,7 +49,7 @@ Use the Chrome profile where you're signed in to your school Google account.
 | "Chrome isn't signed in to your school Google account" | Sign in to your school account in this Chrome profile. With several accounts, add your school email in settings. |
 | "your school Google account can't open it" | The teacher shared it with someone else. Ask them, or open it from Canvas. |
 | "the teacher turned off downloading" | A Drive file, or a doc whose page view had no text. Open it and read it there. |
-| "Couldn't reach http://localhost:…" | Start Helper isn't running, or the port in settings is wrong. |
+| "Couldn't reach http://localhost:…" | warmstart isn't running, or the port in settings is wrong. |
 | "The server says the key is wrong" | Run `python -m app.browser_files key` again in the folder the server runs from, and paste that. |
 | You changed files in `extension/` | Click the reload arrow on the extension's card in `chrome://extensions`. |
 

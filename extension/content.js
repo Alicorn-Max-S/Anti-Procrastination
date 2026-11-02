@@ -1,4 +1,4 @@
-// Start Helper files: runs on Google Docs/Slides/Sheets/Drive file pages (and frames of them).
+// warmstart files: runs on Google Docs/Slides/Sheets/Drive file pages (and frames of them).
 // Tells the service worker which file this page shows; the server decides whether to save it.
 // When asked, fetches the file's export from here: a same-origin request, so it works even when
 // the browser's cookie settings keep the sign-in off the service worker's request.

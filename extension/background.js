@@ -1,6 +1,6 @@
-// Start Helper files: the service worker.
+// warmstart files: the service worker.
 //
-// Every 10 minutes (and on "Fetch now") it asks the Start Helper server which school Google
+// Every 10 minutes (and on "Fetch now") it asks the warmstart server which school Google
 // files it still needs, downloads each one here with the browser's own Google sign-in, and posts
 // the file to the server. Chrome attaches the Google cookies itself because of the host
 // permissions; this code never reads or stores a cookie. When the student opens a doc, the
@@ -309,12 +309,12 @@ async function saveDoc(answer, pageTitle, tab, frameId, email) {
   if (got.ok) {
     try {
       await upload(answer.url, got, filenameTitle(got.filename) || pageTitle, answer.assignment_id);
-      const saved = answer.assignment ? `Saved as your copy for ${answer.assignment}` : "Saved to Start Helper";
+      const saved = answer.assignment ? `Saved as your copy for ${answer.assignment}` : "Saved to warmstart";
       await badge(tab?.id, true, got.via === "page" ? `${saved} (read from the page view: downloading is off)` : saved);
       return { wanted: true, saved: true, via: got.via || "download" };
     } catch (e) {
       if (got.via !== "page") {
-        await badge(tab?.id, false, `Start Helper didn't take it: ${e.message || e}`);
+        await badge(tab?.id, false, `warmstart didn't take it: ${e.message || e}`);
         return { wanted: true, saved: false, error: String(e.message || e) };
       }
       got = uploadFailure(got, e);
@@ -334,7 +334,7 @@ async function saveCopy({ tabId, url, title, assignmentId }) {
   } catch (e) {
     return { saved: false, error: String(e.message || e) };
   }
-  if (!answer.wanted) return { saved: false, error: "Start Helper doesn't need this doc for that assignment." };
+  if (!answer.wanted) return { saved: false, error: "warmstart doesn't need this doc for that assignment." };
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   const result = await saveDoc(answer, title, tab, 0, email);
   if (result.saved) await runOnce("copy"); // refresh the waiting-copies list

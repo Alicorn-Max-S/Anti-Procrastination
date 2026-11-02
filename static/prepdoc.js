@@ -357,9 +357,29 @@ function pdListSwitch(todo, done) {
   return group;
 }
 
+// The hero lockup from the brand's final board: icon tile, wordmark, slogan, descriptor. The tile
+// sits next to the wordmark, so it's hidden from screen readers.
+function pdHero() {
+  const hero = el("header", "ws-hero");
+  const tile = el("img");
+  tile.src = "/static/brand/app-icon.svg";
+  tile.alt = "";
+  tile.width = tile.height = 168;
+  const text = el("div", "ws-hero-text");
+  text.append(
+    el("h1", "wordmark", "warmstart"),
+    el("p", "ws-slogan", "Less staring. More starting."),
+    el("p", "ws-descriptor", "We do the warm-up and wake-up, so you can get to work."),
+  );
+  hero.append(tile, text);
+  return hero;
+}
+
+// The list is part of warmstart's own page, so it's painted in Clay; each row's dot is its class.
+// With no cards at all it opens on the hero lockup instead of the list header.
 function pdList() {
   const root = el("div", "pd");
-  pdPaint(root, DEFAULT_SUBJECT);
+  pdPaint(root, BRAND.accent);
   const wrap = el("div", "pd-wrap");
   const head = el("header", "pd-list-head");
   const todo = cards.filter((c) => !c.done);
@@ -369,7 +389,7 @@ function pdList() {
   if (cards.length) title.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? `${todo.length} to do` : `${done.length} done`));
   head.append(title);
   if (cards.length) head.append(pdListSwitch(todo.length, done.length));
-  wrap.append(head);
+  wrap.append(cards.length ? head : pdHero());
   const shown = pdListView === "todo" ? todo : done;
   if (cards.length && !shown.length) {
     wrap.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? "Nothing left to do. Nice." : "Nothing marked done yet."));
@@ -634,7 +654,7 @@ function pdStartHere(c, steps, checked) {
   hero.append(el("h2", "pd-over strong", `${what} · about ${steps[cur].minutes} min`), el("p", "pd-hero-text", steps[cur].text));
   // The subline: why the steps are general, how long the reading is, or when it's planned.
   let sub = "";
-  if (cur === 0 && !c.instructions_seen) sub = "Start Helper couldn't read the instructions for this one, so the steps are general. Find the handout first.";
+  if (cur === 0 && !c.instructions_seen) sub = "warmstart couldn't read the instructions for this one, so the steps are general. Find the handout first.";
   else if (cur === 0 && c.reading) sub = `${readingText(c.reading)}.`;
   else if (c.next_block) sub = `Planned for ${fmtDayTime(new Date(c.next_block))}.`;
   if (sub) hero.append(el("p", "pd-sub", sub));

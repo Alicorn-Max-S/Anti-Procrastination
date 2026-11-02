@@ -1,13 +1,13 @@
 {
-  "name": "Start Helper",
-  "short_name": "Start",
-  "description": "Prep cards with the first step decided, a ping at start time, and a re-plan when you miss it.",
+  "name": "warmstart",
+  "short_name": "warmstart",
+  "description": "We do the warm-up and wake-up, so you can get to work.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f6f6f4",
-  "theme_color": "#1c1c1c",
+  "background_color": "#FFFFFF",
+  "theme_color": "#18181B",
   "icons": [
     { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
