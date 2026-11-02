@@ -101,7 +101,7 @@ Part B only starts if the go/no-go check in Part C passes.
   - Clarify: 17 type questions catch 7 of the 16 type errors, and 23 template questions catch 14 of the 22 errors on asked templates. That's 40 questions over 197 assignments, 19 of them on an answer that was already right. The other 17 errors show "Thought it over".
   - Credit's 0.999 stop halves its thinking at the same 49 of 51. It fixes one answer ("q8+q9+q10" → partial) and breaks one ("q22" → none).
   - Proposed v9 lines: type 0.9987, template 0.9977, effort 0.988, format 0.64 (think 0.99, skip thinking), topic 0.86, credit 0.86 (think 0.999); every other think line never. Approved by Max Nov 1 and written to `decisions/lines.json`, with effort added to `skip_thinking`: on the v9 records effort goes from 147 to 142 right of 191 and saves about 12 s of thinking per assignment on 1 slot. System One now runs on 4 slots (`PARALLEL_SLOTS=4`).
-- Compare, prompt version 9, Nov 1 (`eval/summary.md`, `eval/results.csv`, `eval/compare.png`; copies and records in `data/eval/compare-outputs.v9/` and `data/eval/compare.v9/`). All three setups re-run on the same labels. Glimmer on 1 slot as in production, seed 7. System One full used the proposed v9 lines (`LINES_FILE=data/eval/proposal.v9.json`), since `decisions/lines.json` is still v2. The Dashboard part of the Something else template line was in the prompt for this run. Spark: 590k input tokens (148k cached) and 393k output (387k reasoning) on 248 calls, $2.24.
+- Compare, prompt version 9, Nov 1 (`eval/summary.md`, `eval/results.csv`, `eval/compare.png`; copies and records in `data/eval/compare-outputs.v9/` and `data/eval/compare.v9/`). All three setups re-run on the same labels. Glimmer on 1 slot as in production, seed 7. System One full used the proposed v9 lines (`LINES_FILE=data/eval/proposal.v9.json`), before Max approved them. The Dashboard part of the Something else template line was in the prompt for this run. Spark: 590k input tokens (148k cached) and 393k output (387k reasoning) on 248 calls, $2.24.
 
   | Setup | Accuracy | Expensive | Cheap | Seconds per item | Cost per 1,000 items |
   |---|---|---|---|---|---|
@@ -115,6 +115,18 @@ Part B only starts if the go/no-go check in Part C passes.
   - Speed splits by item kind. Assignments: Spark 5.6 s mean, base Glimmer 9.3 s, System One 13.3 s (median 12.1, 31 of 197 with no thinking at 1.5 s; the fast pass alone is 1.08 s). Test questions: Spark 4.3 s, base Glimmer 9.4 s, System One 4.1 s, since it reads the whole test in one call.
   - Tiers: 38% instant, 38% thought, 13% guessed, 11% from the type; 365 thinking loops, 16 at the cap. Clarify asks 43 questions (22 type, 21 template) over 197 assignments, 19 of them on wrong answers.
   - The v9 lines and the option definitions were fitted on this same labeled set, so System One's numbers are in-sample. Calibrate's System One numbers (type 173, template 167) differ a little from compare's (176, 164) because calibrate ran on 4 slots and batched decoding changes the last digits of probabilities.
+- Compare, current setup, Nov 1: the approved lines in `decisions/lines.json` (effort skips thinking), `PARALLEL_SLOTS=4`, llama-server `-np 4 -c 32768`. Only System One re-run; Spark and base Glimmer as above. Copies and records in `data/eval/compare-outputs.v9-4slot/` and `data/eval/compare.v9-4slot/`; `eval/summary.md` now holds this run.
+
+  | Setup | Accuracy | Expensive | Cheap | Seconds per item | Cost per 1,000 items |
+  |---|---|---|---|---|---|
+  | All Spark | 88.8% | 92.1% | 82.2% | 5.30 | $9.04 |
+  | Base Glimmer | 87.6% | 90.0% | 82.6% | 9.31 | $2.85 |
+  | System One, 1 slot, effort thinks (above) | 87.7% | 91.5% | 80.2% | 11.38 | $3.48 |
+  | System One, 4 slots, effort skips thinking | 86.6% | 91.3% | 77.3% | 6.83 | $2.09 |
+
+  - Effort fell from 145 to 138 right of 191 (72.3%, the fast pass's own score); the calibration records predicted 5 fewer. Type went 176 → 174 and template 164 → 165. Those small moves come from batched decoding on 4 slots, not from a rule change. Format, topic and credit didn't change.
+  - Assignments: 7.9 s mean (median 6.2, against 13.3 and 12.1), now faster than base Glimmer's 9.3 s and behind Spark's 5.6 s. 48 of 197 assignments need no thinking at all (1.3 s). Test questions: 2.5 s each (against 4.1), faster than Spark (4.3) and base Glimmer (9.4).
+  - Tiers: 37% instant, 27% thought, 25% guessed (effort's 69% guessed is most of it), 11% from the type; 240 thinking loops, 6 at the cap. Clarify asks 46 questions (23 type, 23 template), 21 of them on wrong answers.
 - v8 results, System One from the calibration (`data/eval/calibrate-report.v8.txt`, lines in `data/eval/proposal.v8.json`). Both columns are scored on the current labels with lines fitted on those labels, so the v6 numbers differ from the v6 table below.
 
   | Field | System One v6 → v8 | Instant v6 → v8 |

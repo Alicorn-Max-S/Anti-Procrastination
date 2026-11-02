@@ -6,33 +6,33 @@ Run Nov 01, 2026 on the labeled set: 197 assignments and 51 test questions, 723 
 |---|---|---|---|---|---|
 | All Spark (248 items) | 88.8% | 92.1% | 82.2% | 5.30 | $9.04 |
 | Base Glimmer (248 items) | 87.6% | 90.0% | 82.6% | 9.31 | $2.85 |
-| System One, fast pass only (248 items) | 83.3% | 86.1% | 77.7% | 1.02 | $0.31 |
-| System One, full (248 items) | 87.7% | 91.5% | 80.2% | 11.38 | $3.48 |
+| System One, fast pass only (248 items) | 83.0% | 85.9% | 77.3% | 1.04 | $0.32 |
+| System One, full (248 items) | 86.6% | 91.3% | 77.3% | 6.83 | $2.09 |
 
 ## Accuracy by field
 
 | Field | Cost | All Spark | Base Glimmer | System One, fast pass only | System One, full |
 |---|---|---|---|---|---|
-| type (189) | expensive | 92.1% | 92.6% | 88.4% | 93.1% |
-| template (190) | expensive | 89.5% | 87.4% | 84.7% | 86.3% |
-| effort (191) | cheap | 78.0% | 79.1% | 72.8% | 75.9% |
+| type (189) | expensive | 92.1% | 92.6% | 87.3% | 92.1% |
+| template (190) | expensive | 89.5% | 87.4% | 84.7% | 86.8% |
+| effort (191) | cheap | 78.0% | 79.1% | 72.3% | 72.3% |
 | format (51) | cheap | 98.0% | 96.1% | 96.1% | 96.1% |
 | topic (51) | expensive | 98.0% | 100.0% | 96.1% | 98.0% |
-| credit (51) | expensive | 96.1% | 80.4% | 72.5% | 98.0% |
+| credit (51) | expensive | 96.1% | 80.4% | 74.5% | 98.0% |
 
 ## System One tiers
 
 | Field | Instant | Thought | Guessed | From the type | Thinking loops | Hit the cap | To clarify (wrong) |
 |---|---|---|---|---|---|---|---|
-| type | 39.7% | 48.7% | 11.6% | 0.0% | 114 | 5 (4.4%) | 22 (7) |
-| template | 10.0% | 35.8% | 11.1% | 43.2% | 89 | 2 (2.2%) | 21 (12) |
-| effort | 31.4% | 43.5% | 25.1% | 0.0% | 131 | 9 (6.9%) | 0 (0) |
-| format | 94.1% | 0.0% | 5.9% | 0.0% | 0 | 0 (-) | 0 (0) |
-| topic | 94.1% | 3.9% | 2.0% | 0.0% | 3 | 0 (0.0%) | 0 (0) |
-| credit | 45.1% | 54.9% | 0.0% | 0.0% | 28 | 0 (0.0%) | 0 (0) |
-| all | 37.8% | 37.8% | 13.1% | 11.3% | 365 | 16 (4.4%) | 43 (19) |
+| type | 40.2% | 47.6% | 12.2% | 0.0% | 113 | 3 (2.7%) | 23 (8) |
+| template | 8.4% | 37.4% | 12.1% | 42.1% | 94 | 2 (2.1%) | 23 (13) |
+| effort | 31.4% | 0.0% | 68.6% | 0.0% | 0 | 0 (-) | 0 (0) |
+| format | 96.1% | 0.0% | 3.9% | 0.0% | 0 | 0 (-) | 0 (0) |
+| topic | 90.2% | 7.8% | 2.0% | 0.0% | 5 | 0 (0.0%) | 0 (0) |
+| credit | 45.1% | 52.9% | 2.0% | 0.0% | 28 | 1 (3.6%) | 0 (0) |
+| all | 37.3% | 26.6% | 25.0% | 11.1% | 240 | 6 (2.5%) | 46 (21) |
 
-Lines: `data/eval/proposal.v9.json` = `{"lines": {"type": {"fast": 0.9987, "think": 1.01}, "template": {"fast": 0.9977, "think": 1.01}, "effort": {"fast": 0.988, "think": 1.01}, "format": {"fast": 0.64, "think": 0.99}, "topic": {"fast": 0.86, "think": 1.01}, "credit": {"fast": 0.86, "think": 0.999}}, "skip_thinking": ["format"]}`.
+Lines: `decisions/lines.json` = `{"lines": {"type": {"fast": 0.9987, "think": 1.01}, "template": {"fast": 0.9977, "think": 1.01}, "effort": {"fast": 0.988, "think": 1.01}, "format": {"fast": 0.64, "think": 0.99}, "topic": {"fast": 0.86, "think": 1.01}, "credit": {"fast": 0.86, "think": 0.999}}, "skip_thinking": ["effort", "format"]}`.
 
 ## How the numbers are made
 

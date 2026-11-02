@@ -21,25 +21,25 @@ Base Glimmer,topic,,51,51,1.0,,,,,,,,,,
 Base Glimmer,credit,,51,41,0.8039,,,,,,,,,,
 Base Glimmer,assignment items,197,,,,9.289,,,,,,,,,
 Base Glimmer,test_question items,51,,,,9.399,,,,,,,,,
-"System One, fast pass only",all,248,723,602,0.8326,1.024,0.3127,,,,,,,,
-"System One, fast pass only",expensive,,481,414,0.8607,,,,,,,,,,
-"System One, fast pass only",cheap,,242,188,0.7769,,,,,,,,,,
-"System One, fast pass only",type,,189,167,0.8836,,,,,,,,,,
+"System One, fast pass only",all,248,723,600,0.8299,1.043,0.3187,,,,,,,,
+"System One, fast pass only",expensive,,481,413,0.8586,,,,,,,,,,
+"System One, fast pass only",cheap,,242,187,0.7727,,,,,,,,,,
+"System One, fast pass only",type,,189,165,0.873,,,,,,,,,,
 "System One, fast pass only",template,,190,161,0.8474,,,,,,,,,,
-"System One, fast pass only",effort,,191,139,0.7277,,,,,,,,,,
+"System One, fast pass only",effort,,191,138,0.7225,,,,,,,,,,
 "System One, fast pass only",format,,51,49,0.9608,,,,,,,,,,
 "System One, fast pass only",topic,,51,49,0.9608,,,,,,,,,,
-"System One, fast pass only",credit,,51,37,0.7255,,,,,,,,,,
-"System One, fast pass only",assignment items,197,,,,1.084,,,,,,,,,
-"System One, fast pass only",test_question items,51,,,,0.789,,,,,,,,,
-"System One, full",all,248,723,634,0.8769,11.381,3.4776,273,273,95,82,365,16,43,19
-"System One, full",expensive,,481,440,0.9148,,,165,190,44,82,234,7,43,19
-"System One, full",cheap,,242,194,0.8017,,,108,83,51,0,131,9,0,0
-"System One, full",type,,189,176,0.9312,,,75,92,22,0,114,5,22,7
-"System One, full",template,,190,164,0.8632,,,19,68,21,82,89,2,21,12
-"System One, full",effort,,191,145,0.7592,,,60,83,48,0,131,9,0,0
-"System One, full",format,,51,49,0.9608,,,48,0,3,0,0,0,0,0
-"System One, full",topic,,51,50,0.9804,,,48,2,1,0,3,0,0,0
-"System One, full",credit,,51,50,0.9804,,,23,28,0,0,28,0,0,0
-"System One, full",assignment items,197,,,,13.254,,,,,,,,,
-"System One, full",test_question items,51,,,,4.146,,,,,,,,,
+"System One, fast pass only",credit,,51,38,0.7451,,,,,,,,,,
+"System One, fast pass only",assignment items,197,,,,1.102,,,,,,,,,
+"System One, fast pass only",test_question items,51,,,,0.813,,,,,,,,,
+"System One, full",all,248,723,626,0.8658,6.831,2.0874,270,192,181,80,240,6,46,21
+"System One, full",expensive,,481,439,0.9127,,,161,192,48,80,240,6,46,21
+"System One, full",cheap,,242,187,0.7727,,,109,0,133,0,0,0,0,0
+"System One, full",type,,189,174,0.9206,,,76,90,23,0,113,3,23,8
+"System One, full",template,,190,165,0.8684,,,16,71,23,80,94,2,23,13
+"System One, full",effort,,191,138,0.7225,,,60,0,131,0,0,0,0,0
+"System One, full",format,,51,49,0.9608,,,49,0,2,0,0,0,0,0
+"System One, full",topic,,51,50,0.9804,,,46,4,1,0,5,0,0,0
+"System One, full",credit,,51,50,0.9804,,,23,27,1,0,28,1,0,0
+"System One, full",assignment items,197,,,,7.947,,,,,,,,,
+"System One, full",test_question items,51,,,,2.522,,,,,,,,,
