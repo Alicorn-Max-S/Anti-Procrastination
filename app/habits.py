@@ -31,8 +31,8 @@ def starts(pings: list[Ping], blocks: list[Block]) -> list[Start]:
     out = []
     for p in sorted(pings, key=lambda p: p.sent_at):
         a = owner.get(p.block_id)
-        if a is None:
-            continue
+        if a is None or p.answer in ("finished", "unfinished"):
+            continue  # a work session's review isn't a start time
         opened = first.setdefault(a, p.sent_at)
         if p.started_at:
             out.append(Start(opened, max(0.0, (p.started_at - opened).total_seconds() / 60)))

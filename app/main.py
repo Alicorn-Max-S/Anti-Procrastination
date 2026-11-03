@@ -22,7 +22,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import httpx
+
 from app import (
+    added,
     availability,
     browser_files,
     checkin,
@@ -40,7 +43,7 @@ from app import (
 from app.clock import as_local, clock, local_tz
 from app.config import settings
 from app.meta_client import MetaError
-from app.models import Availability, Block, GradedTest, Ping, TestRow
+from app.models import Assignment, Availability, Block, GradedTest, Ping, TestRow
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 TICK_SECONDS = 15  # the longest the background loop sleeps between ticks
@@ -144,22 +147,59 @@ class Context:
         self.assignments = {a.id: a for a in db.list_assignments(conn)}
         self.cards = {c.assignment_id: c for c in db.list_cards(conn)}
         self.courses = {c.id: c.name for c in db.list_courses(conn)}
+        self.sessions = {s.id: s for s in loop.sessions(conn)}
+
+    def course(self, a: Assignment | None) -> str:
+        if a is None:
+            return ""
+        return self.courses.get(a.course_id, "") or ("Your own" if a.origin == "own" else "")
 
     def block(self, b: Block) -> dict:
         a = self.assignments.get(b.assignment_id)
         card = self.cards.get(b.assignment_id)
+        session = self.sessions.get(b.session_id) if b.session_id else None
         return {
             **b.model_dump(mode="json"),
             "name": loop.block_name(a, card, b.assignment_id),
             "kind": card.kind if card else a.kind if a else "other",
-            "course": self.courses.get(a.course_id, "") if a else "",
+            "course": self.course(a),
             "due_at": a.due_at.isoformat() if a and a.due_at else None,
             "first_step": card.first_step if card else "",
+            "session": (session.note or "Work session") if session else None,
         }
+
+    def span(self, s: Availability) -> dict:
+        """A span for the page; a session also names its work."""
+        names = [self.assignments[i].name for i in s.assignment_ids if i in self.assignments]
+        return {**s.model_dump(mode="json"), "names": names}
+
+    def review(self, s: Availability, done: set[int]) -> dict:
+        """A session's "what did you finish?": its work, each with whether it's already done."""
+        items = []
+        for i in s.assignment_ids:
+            a = self.assignments.get(i)
+            if a:
+                items.append({"assignment_id": i, "name": a.name, "course": self.course(a), "done": i in done})
+        return {"id": s.id, "note": s.note or "Work session", "start": s.start.isoformat(), "end": s.end.isoformat(), "items": items}
 
 
 def _done_assignments(blocks: list[Block]) -> set[int]:
     return {b.assignment_id for b in blocks if b.status == "done"}
+
+
+PAST_DUE_SHOWN = timedelta(days=2)  # a synced assignment stays on the list this long after it was due
+
+
+def _listed(a: Assignment, now: datetime) -> bool:
+    """Whether a carded assignment shows on the list: not turned in, and due within the last
+    PAST_DUE_SHOWN, unless the student added it by hand (then it stays until it's done or removed)."""
+    if a.submitted:
+        return False
+    return a.added or not (a.due_at and a.due_at < now - PAST_DUE_SHOWN)
+
+
+# Cards being built in the background for work just added by hand (the page shows a skeleton).
+building: set[int] = set()
 
 
 def _next_start(blocks: list[Block], now: datetime) -> Block | None:
@@ -259,7 +299,8 @@ def state(conn=Depends(get_conn)) -> dict:
         "checkin": [_checkin_view(conn, ctx, blocks, b, now) for b in pending],
         "next_start": ctx.block(next_start) if next_start else None,
         "done_assignments": sorted(_done_assignments(blocks)),
-        "availability": [a.model_dump(mode="json") for a in db.list_availability(conn, now)],
+        "availability": [ctx.span(a) for a in db.list_availability(conn, now)],
+        "reviews": [ctx.review(r, _done_assignments(blocks)) for r in loop.reviews(conn, now)],
         "sync": _sync_state(conn),
         "config": {
             "canvas": loop.canvas_configured(),
@@ -309,17 +350,24 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
         return per_course[course_id]
 
     out = []
+    order = {}
     for card in ctx.cards.values():
         a = ctx.assignments.get(card.assignment_id)
-        if a is None or a.submitted or (a.due_at and a.due_at < now - timedelta(days=2)):
+        if a is None or not _listed(a, now):
             continue
         nb = next_block.get(a.id)
+        order[a.id] = db.due_key(a)
         out.append(
             {
                 **card.model_dump(mode="json"),
                 "name": a.name,
-                "course": ctx.courses.get(a.course_id, ""),
+                "course": ctx.course(a),
                 "due_at": a.due_at.isoformat() if a.due_at else None,
+                # added by hand: due_at is the student's finish-by time; canvas_due_at Canvas's own date
+                "added": a.added,
+                "origin": a.origin,
+                "canvas_due_at": a.canvas_due_at.isoformat() if a.canvas_due_at else None,
+                "building": a.id in building,
                 "html_url": a.html_url,
                 "course_id": a.course_id,
                 "notes_medium": prep.notes_medium(conn, a.course_id),
@@ -335,7 +383,7 @@ def cards(conn=Depends(get_conn)) -> list[dict]:
                 **course_model(a.course_id),
             }
         )
-    out.sort(key=lambda c: (c["done"], c["due_at"] is None, c["due_at"] or ""))
+    out.sort(key=lambda c: (c["done"], order[c["assignment_id"]]))  # real datetimes, not text
     return out
 
 
@@ -394,11 +442,14 @@ def _plan_answer(conn, block_id: int, answer: str, picked_time: datetime | None)
         new_blocks, record = checkin.apply_answer(blocks, target.id, answer, now, picked_time, ping, due, avail=avail)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # what the reflow shifted goes back in due order (the answered block is pinned, so it stays)
+    reordered = {b.id: b for b in scheduler.due_order(new_blocks, now, due, avail=avail, tests=loop.test_ids(conn))}
+    new_blocks = [reordered.get(b.id, b) for b in new_blocks]
     record = record if ping else record.model_copy(update={"block_id": block_id})
     before = {b.id: b for b in blocks}
     moved = [
         b.id
-        for b in new_blocks
+        for b in sorted(new_blocks, key=lambda b: b.start)
         if b.id != target.id and b.id in before and (before[b.id].start, before[b.id].end) != (b.start, b.end)
     ]
     return blocks, new_blocks, record, target, moved
@@ -486,12 +537,7 @@ def assignment_done(assignment_id: int, conn=Depends(get_conn)) -> dict:
     """Mark an assignment finished (for paper work Canvas never sees submitted)."""
     if db.get_assignment(conn, assignment_id) is None:
         raise HTTPException(404, "No such assignment")
-    live = [b for b in db.list_blocks(conn) if b.assignment_id == assignment_id and b.status in scheduler.ACTIVE]
-    for b in live:
-        db.save_block(conn, b.model_copy(update={"status": "done", "at_risk": False}))
-    if not live:
-        now = clock.now()
-        db.save_block(conn, Block(assignment_id=assignment_id, start=now, end=now, status="done"))
+    loop.mark_done(conn, assignment_id, clock.now())
     return {"ok": True}
 
 
@@ -529,20 +575,85 @@ class AvailabilityBatch(BaseModel):
 
 
 class SayIn(BaseModel):
-    text: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class SpanIn(AvailabilityIn):
+    kind: Literal["off", "open", "session"]
+    assignment_ids: list[int] = Field(default_factory=list, max_length=50)
+
+
+class PlanIn(BaseModel):
+    assignment_ids: list[int] = Field(min_length=1, max_length=50)
+    start: datetime
+    end: datetime
+
+
+class AdjustIn(BaseModel):
+    entries: list[SpanIn] = Field(default_factory=list, max_length=availability.MAX_SPANS)
+    plans: list[PlanIn] = Field(default_factory=list, max_length=availability.MAX_PLANS)
+    done: list[int] = Field(default_factory=list, max_length=50)
 
 
 def _change_view(conn, change: availability.Change) -> dict:
-    """What a change to the student's spans did: the spans, each block that moved (with where it
-    was), and the live blocks that still sit in time they said they can't work."""
+    """What a change did: the spans, each block that moved (with where it was), the live blocks
+    that still sit in time they said they can't work, the blocks put in a session or where they
+    asked, the work marked done, and notes on anything that didn't fit."""
     ctx = Context(conn)
     return {
-        "entries": [a.model_dump(mode="json") for a in change.entries],
+        "entries": [ctx.span(a) for a in change.entries],
         "moved": [
             {**ctx.block(after), "was": {"start": before.start.isoformat(), "end": before.end.isoformat()}}
             for before, after in change.moved
         ],
         "kept": [ctx.block(b) for b in change.kept],
+        "placed": [ctx.block(b) for b in sorted(change.placed, key=lambda b: b.start)],
+        "done": [{"id": i, "name": ctx.assignments[i].name} for i in change.done if i in ctx.assignments],
+        "notes": change.notes,
+    }
+
+
+def _spans(conn, entries: list[SpanIn], now: datetime) -> list[Availability]:
+    """Check what the page sent and make spans of it: real times, not over, a session's work on
+    the list (a session without any is time off)."""
+    known = set(Context(conn).assignments)
+    spans = []
+    for e in entries:
+        start, end = as_local(e.start), as_local(e.end)
+        if end <= start:
+            raise HTTPException(400, "That ends before it starts")
+        if end <= now:
+            raise HTTPException(400, "That time is already over")
+        ids = [i for i in dict.fromkeys(e.assignment_ids) if i in known] if e.kind == "session" else []
+        kind = "off" if e.kind == "session" and not ids else e.kind
+        spans.append(Availability(kind=kind, start=start, end=end, note=e.note.strip(), assignment_ids=ids))
+    return spans
+
+
+def _open_work(conn, now: datetime) -> list[dict]:
+    """What's on the student's list and not done, for the model to name: {id, name, course, kind, due}."""
+    ctx = Context(conn)
+    done = _done_assignments(db.list_blocks(conn))
+    out = []
+    for card in ctx.cards.values():
+        a = ctx.assignments.get(card.assignment_id)
+        if a is None or a.id in done or not _listed(a, now):
+            continue
+        out.append({"id": a.id, "name": a.name, "course": ctx.course(a), "kind": card.kind, "due": a.due_at})
+    return sorted(out, key=lambda w: (w["due"] is None, w["due"].timestamp() if w["due"] else 0))
+
+
+def _proposal_view(conn, p: availability.Proposal) -> dict:
+    ctx = Context(conn)
+    names = lambda ids: [ctx.assignments[i].name for i in ids if i in ctx.assignments]
+    return {
+        "entries": [ctx.span(a) for a in p.entries],
+        "plans": [
+            {"assignment_ids": x.assignment_ids, "names": names(x.assignment_ids), "start": x.start.isoformat(), "end": x.end.isoformat()}
+            for x in p.plans
+        ],
+        "done": [{"id": i, "name": n} for i, n in zip(p.done, names(p.done))],
+        "notes": p.notes,
     }
 
 
@@ -557,17 +668,66 @@ def add_availability(body: AvailabilityBatch, conn=Depends(get_conn)) -> dict:
     """Save what the student can't or can do, and move the planned blocks around it right away
     (before a ping is missed). Reports the blocks that moved and any live block left in the way."""
     now = clock.now()
-    spans = []
-    for e in body.entries:
-        start, end = as_local(e.start), as_local(e.end)
-        if end <= start:
-            raise HTTPException(400, "That ends before it starts")
-        if end <= now:
-            raise HTTPException(400, "That time is already over")
-        spans.append(Availability(kind=e.kind, start=start, end=end, note=e.note.strip()))
-    change = availability.apply(conn, spans, now)
+    change = availability.apply(conn, _spans(conn, [SpanIn(**e.model_dump()) for e in body.entries], now), now)
     wake_loop()  # a block's start may now be sooner (or later) than the loop planned for
     return _change_view(conn, change)
+
+
+@app.post("/api/adjust")
+def adjust_week(body: AdjustIn, conn=Depends(get_conn)) -> dict:
+    """Apply what the page showed and the student OK'd (from /api/availability/parse, times maybe
+    edited): spans and work sessions, work put where they asked, and work marked done."""
+    if not (body.entries or body.plans or body.done):
+        raise HTTPException(400, "Nothing to change")
+    now = clock.now()
+    spans = _spans(conn, body.entries, now)
+    plans = []
+    for p in body.plans:
+        start, end = as_local(p.start), as_local(p.end)
+        if end <= max(start, now):
+            raise HTTPException(400, "That time is already over")
+        plans.append(availability.Plan(p.assignment_ids, start, end))
+    change = availability.adjust(conn, spans, now, plans=plans, done=body.done)
+    wake_loop()
+    return _change_view(conn, change)
+
+
+class ReviewIn(BaseModel):
+    finished: list[int] = Field(default_factory=list, max_length=50)
+
+
+@app.post("/api/sessions/{session_id}/review")
+def review_session(session_id: int, body: ReviewIn, background: BackgroundTasks, conn=Depends(get_conn)) -> dict:
+    """The answer to "what did you finish?" at a work session's end (or early). Finished work is
+    marked done; the rest gets a new block. Each session block's answer is saved in `pings`."""
+    now = clock.now()
+    s = db.get_availability(conn, session_id)
+    if s is None or s.kind != "session":
+        raise HTTPException(404, "No such work session")
+    if now < s.start:
+        raise HTTPException(409, "That session hasn't started yet")
+    finished = set(body.finished) & set(s.assignment_ids)
+    for b in db.list_blocks(conn):
+        if b.session_id != s.id or b.status not in scheduler.ACTIVE:
+            continue
+        ok = b.assignment_id in finished
+        db.save_block(conn, b.model_copy(update={"status": "done" if ok else "started", "at_risk": False}))
+        db.save_ping(conn, Ping(block_id=b.id, sent_at=now, answer="finished" if ok else "unfinished"))
+    for aid in finished:
+        loop.mark_done(conn, aid, now)
+    db.kv_set(conn, f"session.{s.id}.reviewed", now.isoformat())
+    loop.replan(conn, now)
+    wake_loop()
+    ctx = Context(conn)
+    blocks = db.list_blocks(conn)
+    later = []
+    for aid in s.assignment_ids:
+        if aid in finished or aid not in ctx.assignments:
+            continue
+        nxt = min((b for b in blocks if b.assignment_id == aid and b.status == "planned" and b.start > now), key=lambda b: b.start, default=None)
+        later.append({"id": aid, "name": ctx.assignments[aid].name, "next": nxt.start.isoformat() if nxt else None})
+    background.add_task(_answered_push, [f"session-{s.id}"], f"Saved what you finished in {s.note or 'the session'}.", "")
+    return {"finished": sorted(finished), "unfinished": later}
 
 
 @app.delete("/api/availability/{availability_id}")
@@ -581,16 +741,18 @@ def delete_availability(availability_id: int, conn=Depends(get_conn)) -> dict:
 
 
 @app.post("/api/availability/parse")
-def parse_availability(body: SayIn) -> dict:
-    """Read what the student wrote ("I can't work Tuesday after 5, soccer") into spans, without
-    saving them: the page shows them for a yes first, then posts them to /api/availability."""
+def parse_availability(body: SayIn, conn=Depends(get_conn)) -> dict:
+    """Read what the student wrote ("I can't work Tuesday after 5, soccer", "math tutoring at 1, I'll
+    do my STEM work there, put humanities around it") into spans, work sessions, plans and finished
+    work, without saving anything: the page shows it for a yes first, then posts it to /api/adjust."""
     if not meta_client.configured():
         raise HTTPException(503, "Set META_API_KEY in .env to read this, or use the form")
+    now = clock.now()
     try:
-        spans, notes = availability.parse(body.text, clock.now())
+        proposal = availability.read(body.text, now, _open_work(conn, now))
     except MetaError as e:
         raise HTTPException(502, str(e))
-    return {"entries": [a.model_dump(mode="json") for a in spans], "notes": notes}
+    return _proposal_view(conn, proposal)
 
 
 class NotesIn(BaseModel):
@@ -605,6 +767,180 @@ def set_course_notes(course_id: int, body: NotesIn, conn=Depends(get_conn)) -> d
     prep.set_notes_medium(conn, course_id, body.medium)
     stale = prep.mark_course_stale(conn, course_id, clock.now()) if changed else []
     return {"course_id": course_id, "medium": body.medium, "stale": stale}
+
+
+# ---- work added by hand (added.py) ------------------------------------------------------------
+
+
+def _listed_ids(conn, now: datetime) -> tuple[set[int], set[int]]:
+    """(assignments on the list, assignments marked done)."""
+    ctx = Context(conn)
+    listed = {i for i in ctx.cards if (a := ctx.assignments.get(i)) and _listed(a, now)}
+    return listed, _done_assignments(db.list_blocks(conn))
+
+
+def _build_card(assignment_id: int) -> None:
+    """The model's card for work just added, after the response (the page shows a skeleton)."""
+    conn = db.connect()
+    try:
+        a = db.get_assignment(conn, assignment_id)
+        if a is not None:
+            prep.build_prep_card(conn, a)
+            loop.replan(conn, clock.now())  # a test or quick task gets its own kind of block
+            wake_loop()
+    except Exception:
+        log.exception("card for added work %s failed", assignment_id)
+    finally:
+        building.discard(assignment_id)
+        conn.close()
+
+
+def _after_add(conn, a: Assignment, background: BackgroundTasks) -> dict:
+    """Give newly added work a card (the template now, the model's in the background) and a block."""
+    now = clock.now()
+    card = db.get_card(conn, a.id)
+    if card is None:
+        if meta_client.configured():
+            db.save_card(conn, prep.fallback_card(conn, a))
+        else:
+            prep.build_prep_card(conn, a)
+    if meta_client.configured() and (card is None or card.generated_by != "model"):
+        building.add(a.id)
+        background.add_task(_build_card, a.id)
+    loop.replan(conn, now)
+    wake_loop()
+    nxt = min(
+        (b for b in db.list_blocks(conn) if b.assignment_id == a.id and b.status == "planned" and b.end > now),
+        key=lambda b: b.start,
+        default=None,
+    )
+    return {
+        "assignment_id": a.id,
+        "name": a.name,
+        "finish_by": a.due_at.isoformat() if a.due_at else None,
+        "building": a.id in building,
+        "next_block": nxt.start.isoformat() if nxt else None,
+    }
+
+
+@app.get("/api/added/candidates")
+def added_candidates(conn=Depends(get_conn)) -> dict:
+    """Canvas assignments that aren't on the list (past due, no date, or later), for "Add work"."""
+    now = clock.now()
+    listed, done = _listed_ids(conn, now)
+    return {
+        "items": added.candidates(conn, now, listed, done),
+        "finish_by": added.default_finish_by(now).isoformat(),
+        "canvas": loop.canvas_configured(),
+    }
+
+
+@app.get("/api/canvas/modules")
+def canvas_modules(course_id: int, conn=Depends(get_conn)) -> dict:
+    """A course's Modules, live from Canvas, each item saying whether it's on the list already."""
+    if not loop.canvas_configured():
+        raise HTTPException(503, "Canvas isn't connected: put CANVAS_TOKEN in .env")
+    try:
+        return {"modules": added.modules(conn, course_id, _listed_ids(conn, clock.now())[0])}
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Canvas didn't answer: {type(e).__name__}")
+
+
+class AddIn(BaseModel):
+    source: Literal["canvas", "module"]
+    assignment_id: int | None = None  # canvas
+    course_id: int | None = None  # module
+    module_id: int | None = None
+    item_id: int | None = None
+    finish_by: datetime | None = None  # default: the end of tomorrow
+
+
+@app.post("/api/added")
+def add_work(body: AddIn, background: BackgroundTasks, conn=Depends(get_conn)) -> dict:
+    """Put a Canvas assignment or a Modules item on the list."""
+    now = clock.now()
+    try:
+        if body.source == "canvas":
+            if body.assignment_id is None:
+                raise HTTPException(400, "Which assignment?")
+            a = added.add_canvas(conn, body.assignment_id, body.finish_by, now)
+        else:
+            if not loop.canvas_configured():
+                raise HTTPException(503, "Canvas isn't connected: put CANVAS_TOKEN in .env")
+            if None in (body.course_id, body.module_id, body.item_id):
+                raise HTTPException(400, "Which Modules item?")
+            a = added.add_module_item(conn, body.course_id, body.module_id, body.item_id, body.finish_by, now)
+    except added.AddError as e:
+        raise HTTPException(400, str(e))
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Canvas didn't answer: {type(e).__name__}")
+    return _after_add(conn, a, background)
+
+
+@app.post("/api/added/own")
+def add_own_work(
+    background: BackgroundTasks,
+    name: str = Form(...),
+    course_id: int = Form(0),
+    instructions: str = Form(""),
+    finish_by: str = Form(""),
+    files: list[UploadFile] = File(default=[]),
+    conn=Depends(get_conn),
+) -> dict:
+    """The student's own work: a name, a class (0 for none), what to do, files, a finish-by time."""
+    try:
+        finish = datetime.fromisoformat(finish_by) if finish_by.strip() else None
+    except ValueError:
+        raise HTTPException(400, "Couldn't read the finish-by time")
+    uploads = [(f.filename or "file", f.file.read(added.MAX_OWN_BYTES + 1)) for f in files if f.filename]
+    try:
+        a = added.add_own(conn, name, course_id, instructions[:20_000], uploads, finish, clock.now())
+    except added.AddError as e:
+        raise HTTPException(400, str(e))
+    return _after_add(conn, a, background)
+
+
+class FinishByIn(BaseModel):
+    finish_by: datetime
+
+
+@app.put("/api/added/{assignment_id}")
+def set_finish_by(assignment_id: int, body: FinishByIn, conn=Depends(get_conn)) -> dict:
+    """A new finish-by time: its planned blocks (but any the student placed) are planned again."""
+    now = clock.now()
+    try:
+        a = added.set_finish_by(conn, assignment_id, body.finish_by, now)
+    except added.AddError as e:
+        raise HTTPException(400, str(e))
+    for b in db.list_blocks(conn):
+        if b.assignment_id == assignment_id and b.status == "planned" and not b.pinned and b.session_id is None and b.start >= now:
+            db.delete_block(conn, b.id)
+    loop.replan(conn, now)
+    wake_loop()
+    return {"assignment_id": a.id, "finish_by": a.due_at.isoformat()}
+
+
+@app.delete("/api/added/{assignment_id}")
+def remove_added(assignment_id: int, conn=Depends(get_conn)) -> dict:
+    """Take work added by hand off the list (a Modules item or their own is deleted)."""
+    if not added.remove(conn, assignment_id, clock.now()):
+        raise HTTPException(404, "That wasn't added by hand")
+    wake_loop()
+    return {"ok": True}
+
+
+@app.get("/api/own-files/{assignment_id}/{name}")
+def own_file(assignment_id: int, name: str, conn=Depends(get_conn)) -> FileResponse:
+    """One of the student's own uploads, for the prep doc's Files list."""
+    a = db.get_assignment(conn, assignment_id)
+    if a is None or a.origin != "own":
+        raise HTTPException(404, "No such file")
+    root = Path(settings.files_dir).resolve()
+    for rel in a.local_files:
+        path = (root / rel).resolve()
+        if path.name == name and root in path.parents and path.is_file():
+            return FileResponse(path, filename=path.name, content_disposition_type="inline")
+    raise HTTPException(404, "No such file")
 
 
 # ---- simulated clock --------------------------------------------------------------------------

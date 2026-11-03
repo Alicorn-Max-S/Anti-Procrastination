@@ -107,7 +107,7 @@ def fetch_modules(conn: sqlite3.Connection, course_id: int) -> list[dict]:
         data = json.loads(cached)
         if datetime.fromisoformat(data["at"]) > now - MODULES_TTL:
             return data["modules"]
-    if not _has_canvas():
+    if not _has_canvas() or course_id <= 0:  # 0: the student's own work, filed under no class
         return []
     try:
         with canvas._client() as c:

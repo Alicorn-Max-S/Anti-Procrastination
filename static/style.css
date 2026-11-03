@@ -422,6 +422,21 @@ body.modal-open { overflow: hidden; }
 .avail-strip { border-radius: 6px; padding: 6px 8px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .avail-strip.off { background: var(--warn-soft); color: var(--warn); }
 .avail-strip.open { background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--ctrl); }
+/* A work session is warmstart's own plan, so it's Clay, like the block that's on now. */
+.avail-strip.session { background: var(--accent-soft); color: var(--ink); box-shadow: inset 3px 0 0 var(--brand-graphic); }
+.badge.session { background: var(--accent-soft); color: var(--ink); }
+.block .session-note { font-weight: 500; }
+
+/* The end of a work session: one row per assignment, Finished / Not yet. */
+.review-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-width: 760px; }
+.review-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 8px 0; border-bottom: 1px solid var(--pd-soft-ring, var(--line)); }
+.review-list li:last-child { border-bottom: 0; }
+.review-name { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
+.review-name .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.checkin .review-choice { background: var(--pd-page, var(--surface)); }
+.checkin .review-choice button { min-height: 44px; background: transparent; }
+.checkin .review-choice button[aria-pressed="true"] { background: var(--pd-soft-text, var(--ink)); color: var(--pd-page, var(--bg)); }
+.checkin .actions button.primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 @media (max-width: 760px) {
   .week { grid-template-columns: 1fr; }
@@ -429,7 +444,13 @@ body.modal-open { overflow: hidden; }
 }
 
 /* ---- when you can and can't work (Week tab) ---- */
-.avail .row input[type="text"] { flex: 1 1 16rem; min-width: 0; }
+.avail .row input[type="text"], .avail .row textarea { flex: 1 1 16rem; min-width: 0; }
+.avail .row textarea { min-height: 56px; resize: vertical; font: inherit; line-height: 1.4; }
+.avail-list .span-work { order: 1; flex: 1 1 100%; font-size: 14px; color: var(--text2); }
+.proposal-list li { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.proposal-list li:last-child { border-bottom: 0; }
+.proposal-times { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.proposal-times input { min-height: 40px; }
 .avail-manual summary { cursor: pointer; color: var(--text2); font-size: 15px; font-weight: 600; min-height: 40px; display: flex; align-items: center; }
 .avail-manual form { margin-top: 4px; }
 .avail-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }

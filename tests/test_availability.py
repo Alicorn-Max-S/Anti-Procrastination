@@ -323,7 +323,8 @@ def test_a_block_you_are_already_on_stays_and_is_reported(client):
     set_clock(client, at(2, 15, 5))  # block 1 is pinged
     body = say(client, at(2, 15, 30), at(2, 17)).json()
     assert [k["id"] for k in body["kept"]] == [1]
-    assert [(m["id"], datetime.fromisoformat(m["start"])) for m in body["moved"]] == [(2, at(2, 18))]
+    # the lab leaves the time off, then (due a day before the quiz) goes ahead of the quiz's practice
+    assert [(m["id"], datetime.fromisoformat(m["start"])) for m in body["moved"]] == [(2, at(2, 17, 30)), (3, at(2, 19))]
     assert starts(client)[1] == at(2, 15)
 
 

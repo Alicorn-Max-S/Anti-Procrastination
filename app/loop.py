@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from app import checkin, db, prep, push, scheduler, sync
 from app.clock import as_local, clock
 from app.config import settings
-from app.models import Assignment, Block, Ping, PrepCard
+from app.models import Assignment, Availability, Block, Ping, PrepCard
 from app.progress import Progress
 
 log = logging.getLogger(__name__)
@@ -53,14 +53,38 @@ def replan(conn: sqlite3.Connection, now: datetime) -> list[Block]:
     time the student said they can't work and may use time they said they can.
     """
     horizon = now + timedelta(days=settings.card_horizon_days)
-    assignments = [a for a in db.list_assignments(conn) if a.due_at and a.due_at <= horizon]
+    assignments = [a for a in db.list_assignments(conn) if a.due_at and (a.due_at <= horizon or a.added)]
     cards = db.list_cards(conn)
     _drop_long_blocks(conn, assignments, cards)
     existing = [b for b in db.list_blocks(conn) if b.status != "missed"]
     new = scheduler.plan_blocks(assignments, cards, now, existing, avail=db.list_availability(conn, now))
     for b in new:
         b.id = db.save_block(conn, b)
+    if reorder(conn, now):  # the new blocks may have moved: hand back where they are now
+        saved = {b.id: b for b in db.list_blocks(conn)}
+        new = [saved[b.id] for b in new]
     return new
+
+
+def due_dates(conn: sqlite3.Connection) -> dict[int, datetime]:
+    """Assignment id -> when it's due (an added item's finish-by time), for the planner."""
+    return {a.id: a.due_at for a in db.list_assignments(conn) if a.due_at}
+
+
+def test_ids(conn: sqlite3.Connection) -> set[int]:
+    """Assignments whose blocks are practice sessions."""
+    cards = {c.assignment_id: c for c in db.list_cards(conn)}
+    return {a.id for a in db.list_assignments(conn) if scheduler.is_test(a, cards.get(a.id))}
+
+
+def reorder(conn: sqlite3.Connection, now: datetime) -> list[Block]:
+    """Put the planned week in due order (scheduler.due_order) and save what moved."""
+    moved = scheduler.due_order(
+        db.list_blocks(conn), now, due_dates(conn), avail=db.list_availability(conn, now), tests=test_ids(conn)
+    )
+    for b in moved:
+        db.save_block(conn, b)
+    return moved
 
 
 def _drop_long_blocks(conn: sqlite3.Connection, assignments: list[Assignment], cards: list[PrepCard]) -> None:
@@ -81,6 +105,16 @@ def _drop_long_blocks(conn: sqlite3.Connection, assignments: list[Assignment], c
             and db.latest_ping(conn, b.id) is None
         ):
             db.delete_block(conn, b.id)
+
+
+def mark_done(conn: sqlite3.Connection, assignment_id: int, now: datetime) -> None:
+    """Finished: its live blocks are done, or a zero-length done marker when none is live (paper
+    work Canvas never sees submitted, a session's review, "I finished the history doc")."""
+    live = [b for b in db.list_blocks(conn) if b.assignment_id == assignment_id and b.status in scheduler.ACTIVE]
+    for b in live:
+        db.save_block(conn, b.model_copy(update={"status": "done", "at_risk": False}))
+    if not live:
+        db.save_block(conn, Block(assignment_id=assignment_id, start=now, end=now, status="done"))
 
 
 def block_name(a: Assignment | None, card: PrepCard | None, assignment_id: int) -> str:
@@ -161,12 +195,104 @@ def _notify_miss(conn: sqlite3.Connection, b: Block, again: Block | None, renoti
     )
 
 
+# ---- work sessions ("math tutoring, I'll do my STEM work there") -------------------------------
+
+REVIEW_DAYS = 2  # an unanswered "what did you finish?" stays on the page this long
+
+
+def sessions(conn: sqlite3.Connection) -> list[Availability]:
+    return [a for a in db.list_availability(conn) if a.kind == "session"]
+
+
+def session_names(conn: sqlite3.Connection, s: Availability) -> list[str]:
+    names = []
+    for i in s.assignment_ids:
+        a = db.get_assignment(conn, i)
+        if a:
+            names.append(a.name)
+    return names
+
+
+def _flag(conn: sqlite3.Connection, key: str) -> bool:
+    return bool(db.kv_get(conn, key))
+
+
+def reviewed(conn: sqlite3.Connection, session_id: int) -> bool:
+    return _flag(conn, f"session.{session_id}.reviewed")
+
+
+def reviews(conn: sqlite3.Connection, now: datetime) -> list[Availability]:
+    """Sessions that have ended (or that the student is answering early) and still wait for "what
+    did you finish?": not answered, not older than REVIEW_DAYS, with work that isn't done yet."""
+    done = {b.assignment_id for b in db.list_blocks(conn) if b.status == "done"}
+    return [
+        s for s in sessions(conn)
+        if s.end <= now < s.end + timedelta(days=REVIEW_DAYS)
+        and not reviewed(conn, s.id)
+        and any(i not in done for i in s.assignment_ids)
+    ]
+
+
+def review_actions(s: Availability) -> list[dict]:
+    """The review notification's buttons: one answers that everything got done (sw.js posts it),
+    the other opens the page to say which."""
+    return [
+        {"action": "all_done", "title": "Finished them all", "post": f"/api/sessions/{s.id}/review", "body": {"finished": s.assignment_ids}},
+        {"action": "open", "title": "Some aren't done"},
+    ]
+
+
+def _session_events(conn: sqlite3.Connection, now: datetime, events: dict[str, list[int]]) -> None:
+    """At a session's start, one notification naming its work; at its end, the review."""
+    for s in sessions(conn):
+        what = s.note or "Work session"
+        names = session_names(conn, s)
+        if s.start <= now < s.end and not _flag(conn, f"session.{s.id}.started"):
+            db.kv_set(conn, f"session.{s.id}.started", now.isoformat())
+            if now - s.start < scheduler.MAX_LATE_PING:
+                first = next((b for b in db.list_blocks(conn) if b.session_id == s.id), None)
+                card = db.get_card(conn, first.assignment_id) if first else None
+                push.send_ping(
+                    conn,
+                    f"{what}: time for {', '.join(names) or 'your work'}",
+                    card.first_step if card else f"Until {when(s.end)}.",
+                    f"/?block={first.id}" if first else "/",
+                    tag=f"session-{s.id}",
+                    extra={"kind": "session", "session_id": s.id},
+                )
+                events["sessions"].append(s.id)
+        if s.end <= now and not _flag(conn, f"session.{s.id}.ended"):
+            db.kv_set(conn, f"session.{s.id}.ended", now.isoformat())
+            if s in reviews(conn, now):
+                push.send_ping(
+                    conn,
+                    f"{what} is over",
+                    f"What did you finish? {', '.join(names)}.",
+                    f"/?review={s.id}",
+                    tag=f"session-{s.id}",
+                    extra={"kind": "review", "session_id": s.id, "actions": review_actions(s)},
+                )
+                events["reviews"].append(s.id)
+
+
+def session_times(conn: sqlite3.Connection, now: datetime) -> list[datetime]:
+    """When tick next has session work: a start or an end not yet announced."""
+    out = []
+    for s in sessions(conn):
+        if not _flag(conn, f"session.{s.id}.started") and s.start > now - scheduler.MAX_LATE_PING:
+            out.append(s.start)
+        if not _flag(conn, f"session.{s.id}.ended"):
+            out.append(s.end)
+    return out
+
+
 def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
     """Mark missed starts and give each a new block, ping every block whose start time has
     arrived, then notify unanswered misses again (NAG_EVERY apart, NAG_MAX times; a miss whose new
-    block was just pinged isn't waiting any more). Returns the ids of blocks pinged, missed, newly
-    planned and notified again."""
-    events: dict[str, list[int]] = {"pinged": [], "missed": [], "new": [], "nagged": []}
+    block was just pinged isn't waiting any more), and announce work sessions starting and ending.
+    Returns the ids of blocks pinged, missed, newly planned and notified again, and of the
+    sessions announced and asked about."""
+    events: dict[str, list[int]] = {"pinged": [], "missed": [], "new": [], "nagged": [], "sessions": [], "reviews": []}
     missed = scheduler.mark_missed(db.list_blocks(conn), now)
     for b in missed:
         db.save_block(conn, b)
@@ -197,13 +323,19 @@ def tick(conn: sqlite3.Connection, now: datetime) -> dict[str, list[int]]:
             _set_nag(conn, b.id, sent[0] + 1, now)
             _notify_miss(conn, b, checkin.replacement(blocks, b), True, now)
             events["nagged"].append(b.id)
+    _session_events(conn, now, events)
+    if events["reviews"]:  # the session's work stopped counting at its end: plan what's left
+        events["new"] += [b.id for b in replan(conn, now)]
     return events
 
 
-def next_due(blocks: list[Block], now: datetime, nags: dict[int, tuple[int, datetime]]) -> datetime | None:
+def next_due(
+    blocks: list[Block], now: datetime, nags: dict[int, tuple[int, datetime]], extra: list[datetime] | None = None
+) -> datetime | None:
     """When tick next has work: a planned block's start (ping), a pinged block's grace running out
-    (miss), or an unanswered miss's next re-notify (`nags`: block id -> (count, last))."""
-    times = [b.start for b in blocks if b.status == "planned"]
+    (miss), an unanswered miss's next re-notify (`nags`: block id -> (count, last)), or `extra`
+    (work sessions starting and ending)."""
+    times = [b.start for b in blocks if b.status == "planned" and b.session_id is None] + list(extra or [])
     times += [b.start + GRACE for b in blocks if b.status == "pinged"]
     times += [last + NAG_EVERY for count, last in nags.values() if count <= NAG_MAX]
     return min(times) if times else None
@@ -213,7 +345,7 @@ def seconds_to_next(conn: sqlite3.Connection, now: datetime, cap: float) -> floa
     """How long the background loop may sleep: until just after `next_due`, at most `cap`. The
     simulated clock is real time plus a fixed offset, so a simulated wait is a real one."""
     nags = {b.id: sent for b in waiting_misses(conn, now) if (sent := nag(conn, b.id))}
-    due = next_due(db.list_blocks(conn), now, nags)
+    due = next_due(db.list_blocks(conn), now, nags, session_times(conn, now))
     if due is None:
         return cap
     return min(cap, max(MIN_SLEEP, (due - now).total_seconds() + 0.05))

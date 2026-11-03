@@ -74,6 +74,31 @@ const fmtDayTime = (d) => `${d.toLocaleDateString([], { weekday: "short" })} ${f
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const label = (s) => (s || "").replaceAll("_", " ");
 
+// Quote marks as a matched pair (prep.smart_quotes does the same for new cards): straight quotes are
+// the same wedge on both sides in Plus Jakarta Sans, and the model sometimes opens with “ at both ends.
+function smartQuotes(text) {
+  let out = "";
+  for (let i = 0; i < (text || "").length; i++) {
+    const ch = text[i];
+    const prev = out.slice(-1);
+    const afterGap = !prev || /\s/.test(prev) || "([{—–-/".includes(prev);
+    if ('"“”'.includes(ch)) out += afterGap || prev === "‘" ? "“" : "”";
+    else if ("'‘’".includes(ch)) {
+      const next = text[i + 1] || "";
+      out += (afterGap || prev === "“") && next && !/\s/.test(next) ? "‘" : "’";
+    } else out += ch;
+  }
+  return out;
+}
+
+function typeset(c) {
+  c.summary = smartQuotes(c.summary);
+  c.first_step = smartQuotes(c.first_step);
+  c.steps = (c.steps || []).map(smartQuotes);
+  c.watch_out = smartQuotes(c.watch_out);
+  return c;
+}
+
 function dueText(iso) {
   if (!iso) return "No due date";
   const d = new Date(iso);
@@ -84,6 +109,16 @@ function dueText(iso) {
   if (days === 1) return `Due tomorrow ${fmtTime(d)}`;
   return `Due ${fmtDayTime(d)} · in ${days} days`;
 }
+
+// "Finish by tomorrow 11:59 PM": dueText's wording for work added by hand, whose date is the student's own.
+function finishText(iso) {
+  const d = new Date(iso);
+  if (d < now()) return `Finish-by time passed ${fmtDayTime(d)}`;
+  return dueText(iso).replace(/^Due/, "Finish by");
+}
+
+// "Wed, Oct 28, 4:11 PM": a date more than a few days off needs its month and day.
+const fmtDate = (d) => `${fmtDay(d)}, ${fmtTime(d)}`;
 
 let toastTimer;
 function toast(msg, ms = 3500) {
@@ -124,7 +159,7 @@ async function refresh(reloadCards = false) {
   updateTitle();
   closeAnswered();
   scheduleNextStart();
-  if (reloadCards || s.sync.last !== lastSyncSeen) {
+  if (reloadCards || s.sync.last !== lastSyncSeen || cards.some((c) => c.building)) {
     lastSyncSeen = s.sync.last;
     await loadCards();
   }
@@ -263,14 +298,15 @@ function renderCheckin() {
     notifyPermission(),
     pdMode(),
     ...state.checkin.map((b) => `${b.id}:${b.status}:${classColor(b.assignment_id)}:${b.replacement?.start ?? ""}:${(b.choices || []).map((c) => (c.key === "in_15" ? c.key : c.start)).join("|")}`),
+    ...state.reviews.map((r) => `review:${r.id}:${r.items.map((i) => `${i.assignment_id}${i.done ? "d" : ""}`).join("|")}`),
   ].join(",");
   if (key === renderedKeys.checkin) return; // don't wipe a time the student is typing
   renderedKeys.checkin = key;
   const pings = state.checkin.filter((b) => b.status !== "missed");
   const misses = state.checkin.filter((b) => b.status === "missed");
-  const notice = state.checkin.length ? notifyNotice() : null;
+  const notice = state.checkin.length || state.reviews.length ? notifyNotice() : null;
   const listNotice = notice && !misses.length ? [notice] : [];
-  $("#checkin").replaceChildren(...listNotice, ...pings.map(checkinBox));
+  $("#checkin").replaceChildren(...listNotice, ...state.reviews.map(reviewBox), ...pings.map(checkinBox));
   const modal = $("#miss-modal");
   const wasOpen = !modal.hidden;
   modal.hidden = !misses.length;
@@ -388,11 +424,65 @@ function checkinBox(b) {
   if (missed) box.append(el("p", "when", `Planned for ${fmtDayTime(new Date(b.start))}. When will you start?`));
   else {
     const first = el("div", "first");
-    first.append(el("span", "first-label", "First step"), el("p", null, b.first_step || "Open the prep card for your first step."));
+    first.append(el("span", "first-label", "First step"), el("p", null, smartQuotes(b.first_step) || "Open the prep card for your first step."));
     box.append(first);
     if (b.habit) box.append(el("p", "muted", b.habit));
   }
   box.append(...startButtons(b));
+  return box;
+}
+
+// The end of a work session: "Math tutoring is over. What did you finish?" One row per assignment
+// with Finished / Not yet, then Save. Finished work is marked done; the rest is planned again.
+function reviewBox(r) {
+  const box = el("div", "checkin review");
+  box.id = `review-${r.id}`;
+  pdPaint(box, BRAND.accent);
+  box.append(el("span", "checkin-tag", "Session over"));
+  box.append(el("h2", null, `${pdCap(r.note)} is over. What did you finish?`));
+  box.append(el("p", "when", `${fmtDayTime(new Date(r.start))}–${fmtTime(new Date(r.end))}`));
+  const picks = new Map(r.items.map((i) => [i.assignment_id, i.done ? true : null]));
+  const list = el("ul", "review-list");
+  const save = button("Save", "primary", () => submit());
+  const refreshSave = () => (save.disabled = [...picks.values()].some((v) => v === null));
+  for (const item of r.items) {
+    const li = el("li");
+    const name = el("span", "review-name");
+    const dot = el("span", "dot");
+    dot.style.background = pdGraphic(classColor(item.assignment_id));
+    dot.setAttribute("aria-hidden", "true");
+    name.append(dot, document.createTextNode(item.name));
+    const group = el("div", "pd-switch review-choice");
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", `Did you finish ${item.name}?`);
+    for (const [value, text] of [[true, "Finished"], [false, "Not yet"]]) {
+      const b = button(text, null, () => {
+        picks.set(item.assignment_id, value);
+        group.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+        refreshSave();
+      });
+      b.setAttribute("aria-pressed", String(picks.get(item.assignment_id) === value));
+      group.append(b);
+    }
+    li.append(name, group);
+    list.append(li);
+  }
+  const submit = async (all = false) => {
+    const finished = r.items.filter((i) => all || picks.get(i.assignment_id) === true).map((i) => i.assignment_id);
+    try {
+      const res = await post(`/api/sessions/${r.id}/review`, { finished });
+      const later = res.unfinished.map((u) => (u.next ? `${u.name} is set for ${fmtDayTime(new Date(u.next))}` : `${u.name} gets a new time`));
+      toast(later.length ? `Saved. ${later.join(". ")}.` : "Saved. All of it is done.", 7000);
+      renderedKeys.week = "";
+      await refresh(true);
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+  refreshSave();
+  const actions = el("div", "actions");
+  actions.append(save, button("Finished them all", null, () => submit(true)));
+  box.append(list, actions);
   return box;
 }
 
@@ -403,8 +493,10 @@ function cardAlert(c) {
   if (c.past_due) {
     const box = el("div", "pd-tile-box");
     box.append(
-      el("strong", null, `Past due since ${fmtDayTime(new Date(c.due_at))}`),
-      el("p", null, "Canvas doesn't show it turned in. Do it now and turn it in late, or mark it done if you handed it in on paper."),
+      el("strong", null, c.added ? `Your finish-by time passed on ${fmtDayTime(new Date(c.due_at))}` : `Past due since ${fmtDayTime(new Date(c.due_at))}`),
+      el("p", null, c.added
+        ? "Pick a new finish-by time below and it gets planned again, or mark it done."
+        : "Canvas doesn't show it turned in. Do it now and turn it in late, or mark it done if you handed it in on paper."),
     );
     const actions = el("div", "actions");
     if (/^https?:\/\//i.test(c.html_url || "")) {
@@ -476,7 +568,7 @@ function renderWeek() {
     state.week_start,
     pdMode(),
     state.blocks.map((b) => [b.id, b.start, b.status, b.at_risk, classColor(b.assignment_id)]),
-    state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note]),
+    state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note, a.names]),
   ]);
   if (key === renderedKeys.week) return;
   renderedKeys.week = key;
@@ -494,7 +586,7 @@ function renderWeek() {
       col.append(el("h3", null, i === 0 ? `Today · ${fmtDay(d)}` : fmtDay(d)));
       const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
       state.availability.filter((a) => new Date(a.start) < dayEnd && new Date(a.end) > d).forEach((a) => col.append(spanStrip(a, d, dayEnd)));
-      byDay[i].forEach((b) => col.append(blockEl(b)));
+      byDay[i].sort((a, b) => new Date(a.start) - new Date(b.start)).forEach((b) => col.append(blockEl(b)));
       if (!byDay[i].length) col.append(el("p", "muted small", "Free"));
       return col;
     }),
@@ -521,6 +613,7 @@ function blockEl(b) {
     c.append(dot, document.createTextNode(b.course));
     n.append(c);
   }
+  if (b.session) n.append(el("div", "c session-note", `During ${b.session}`));
   if (BLOCK_STATUS[b.status]) n.append(el("div", "s", BLOCK_STATUS[b.status]));
   else if (b.status !== "planned") n.append(el("div", "s", label(b.status)));
   if (b.at_risk) n.append(el("div", "s risk-note", "Ends after it's due"));
@@ -534,7 +627,7 @@ function blockEl(b) {
 // found for a yes, and only then posts them; the form posts a span directly. Either way the server
 // moves the planned blocks at once and answers with what moved.
 
-const KIND_TEXT = { off: "Can't work", open: "Can work" };
+const KIND_TEXT = { off: "Can't work", open: "Can work", session: "Work session" };
 
 // "Tue 5:00 PM–12:00 AM", or "Mon 2:00 PM–Tue 9:00 AM" when it crosses midnight.
 function spanText(a) {
@@ -549,16 +642,18 @@ function spanStrip(a, dayStart, dayEnd) {
   const from = new Date(Math.max(new Date(a.start), dayStart));
   const to = new Date(Math.min(new Date(a.end), dayEnd));
   const all = to - from >= 86_400_000 - 60_000;
-  const text = `${KIND_TEXT[a.kind]} ${all ? "all day" : `${fmtTime(from)}–${fmtTime(to)}`}`;
-  const n = el("div", `avail-strip ${a.kind}`, a.note ? `${text} · ${a.note}` : text);
-  n.title = `${KIND_TEXT[a.kind]}: ${spanText(a)}${a.note ? ` (${a.note})` : ""}`;
+  const what = a.kind === "session" && a.note ? pdCap(a.note) : KIND_TEXT[a.kind];
+  const text = `${what} ${all ? "all day" : `${fmtTime(from)}–${fmtTime(to)}`}`;
+  const n = el("div", `avail-strip ${a.kind}`, a.note && a.kind !== "session" ? `${text} · ${a.note}` : text);
+  n.title = `${KIND_TEXT[a.kind]}: ${spanText(a)}${a.note ? ` (${a.note})` : ""}${a.names?.length ? `. Working on ${a.names.join(", ")}` : ""}`;
   return n;
 }
 
 function spanLine(a) {
   const li = el("li");
-  li.append(el("span", `badge ${a.kind === "off" ? "warn" : "ok"}`, KIND_TEXT[a.kind]), el("span", "when", spanText(a)));
+  li.append(el("span", `badge ${a.kind === "off" ? "warn" : a.kind === "session" ? "session" : "ok"}`, KIND_TEXT[a.kind]), el("span", "when", spanText(a)));
   if (a.note) li.append(el("span", "muted", `· ${a.note}`));
+  if (a.kind === "session" && a.names?.length) li.append(el("span", "span-work", `Working on ${a.names.join(", ")}. I'll ask what you finished at ${fmtTime(new Date(a.end))}.`));
   return li;
 }
 
@@ -566,12 +661,12 @@ function renderAvailability() {
   const hasModel = state.config.model;
   $("#avail-text").disabled = !hasModel;
   $("#avail-say-btn").disabled = !hasModel;
-  $("#avail-text").placeholder = hasModel ? "I can't work tomorrow after 5, I have soccer" : "Needs META_API_KEY in .env. Use the form below.";
+  $("#avail-text").placeholder = hasModel ? "Math tutoring at 1, I'll do my STEM work there. Put my humanities around it." : "Needs META_API_KEY in .env. Use the form below.";
   if (!hasModel && !availNoticed) {
     availNoticed = true;
     $("#avail-manual").open = true;
   }
-  const key = JSON.stringify(state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note]));
+  const key = JSON.stringify(state.availability.map((a) => [a.id, a.kind, a.start, a.end, a.note, a.names]));
   if (key === renderedKeys.avail) return;
   renderedKeys.avail = key;
   $("#avail-list").replaceChildren(
@@ -587,12 +682,18 @@ let availNoticed = false; // the form opens itself once when there's no model ke
 // What a change did, for the toast: where the blocks went, anything left in the way, anything now late.
 function changeText(r, removed) {
   const parts = [];
+  if (r.done?.length) parts.push(`Marked done: ${r.done.map((d) => d.name).join(", ")}.`);
+  if (r.placed?.length) {
+    const named = r.placed.slice(0, 4).map((m) => `${m.name} ${fmtDayTime(new Date(m.start))}${m.session ? ` (${m.session})` : ""}`);
+    parts.push(`Planned: ${named.join(", ")}${r.placed.length > 4 ? ` and ${r.placed.length - 4} more` : ""}.`);
+  }
   if (r.moved.length) {
     const named = r.moved.slice(0, 3).map((m) => `${m.name} to ${fmtDayTime(new Date(m.start))}`);
     const more = r.moved.length > 3 ? ` and ${r.moved.length - 3} more` : "";
     parts.push(`${removed ? "Moved into the freed time" : "Moved"}: ${named.join(", ")}${more}.`);
-  } else parts.push(removed ? "Removed." : "Saved. Nothing in your week was in the way.");
+  } else if (!parts.length) parts.push(removed ? "Removed." : "Saved. Nothing in your week was in the way.");
   for (const k of r.kept) parts.push(`${k.name} is already under way, so I left it.`);
+  for (const n of r.notes || []) parts.push(n);
   const late = r.moved.filter((m) => m.at_risk).length;
   if (late) parts.push(`${late} now end${late === 1 ? "s" : ""} after ${late === 1 ? "it's" : "they're"} due.`);
   return parts.join(" ");
@@ -626,30 +727,86 @@ async function removeSpan(id) {
   }
 }
 
-// What the server read from the text, for a yes before anything moves.
+// What the server read from the text, for a yes before anything moves: the spans (each time
+// editable, since the model may have assumed one), work sessions with their work, work it will put
+// somewhere, work to mark done, and what it assumed or couldn't use. "Adjust my week" posts it all.
 function showProposal(r) {
   const box = $("#avail-proposal");
   box.hidden = false;
   const notes = r.notes.map((n) => el("p", "muted small", n));
-  if (!r.entries.length) {
-    box.replaceChildren(el("p", null, "I couldn't find a time to change in that."), ...notes);
+  if (!r.entries.length && !r.plans.length && !r.done.length) {
+    box.replaceChildren(el("p", null, "I couldn't find anything to change in that."), ...notes);
     box.append(button("OK", "ghost", () => (box.hidden = true)));
     return;
   }
-  const list = el("ul", "avail-list");
-  r.entries.forEach((a) => list.append(spanLine(a)));
+  const entries = r.entries.map((a) => ({ ...a }));
+  const list = el("ul", "avail-list proposal-list");
+  entries.forEach((a) => list.append(proposalSpan(a)));
+  for (const p of r.plans) {
+    const li = el("li");
+    const window = `${fmtDayTime(new Date(p.start))}–${fmtTime(new Date(p.end))}`;
+    li.append(el("span", "badge ok", "Plan"), el("span", "when", `In free time ${window}`), el("span", "span-work", p.names.join(", ")));
+    list.append(li);
+  }
+  if (r.done.length) {
+    const li = el("li");
+    li.append(el("span", "badge ok", "Done"), el("span", "span-work", r.done.map((d) => d.name).join(", ")));
+    list.append(li);
+  }
   const row = el("div", "actions");
   row.append(
     button("Adjust my week", "primary", async (e) => {
       e.target.disabled = true;
-      if (await applySpans(r.entries)) {
+      const ok = await applyChange({
+        entries: entries.map(({ kind, start, end, note, assignment_ids }) => ({ kind, start, end, note, assignment_ids })),
+        plans: r.plans.map(({ assignment_ids, start, end }) => ({ assignment_ids, start, end })),
+        done: r.done.map((d) => d.id),
+      });
+      if (ok) {
         box.hidden = true;
         $("#avail-text").value = "";
       } else e.target.disabled = false;
     }),
     button("Cancel", "ghost", () => (box.hidden = true)),
   );
-  box.replaceChildren(el("p", null, "Here's what I understood:"), list, ...notes, row);
+  box.replaceChildren(el("p", null, "Here's what I understood. Change a time if it's off:"), list, ...notes, row);
+}
+
+// One span in the proposal: what it is, its start and end as editable times, and for a work session
+// the work it holds and when it asks what got finished.
+function proposalSpan(a) {
+  const li = el("li", "proposal-span");
+  li.append(el("span", `badge ${a.kind === "off" ? "warn" : a.kind === "session" ? "session" : "ok"}`, KIND_TEXT[a.kind]));
+  const times = el("span", "proposal-times");
+  const field = (key, labelText) => {
+    const input = el("input");
+    input.type = "datetime-local";
+    input.value = toLocalInput(new Date(a[key]));
+    input.setAttribute("aria-label", labelText);
+    input.addEventListener("change", () => {
+      if (input.value) a[key] = new Date(input.value).toISOString();
+    });
+    return input;
+  };
+  times.append(field("start", "Starts"), el("span", "muted small", "to"), field("end", "Ends"));
+  li.append(times);
+  if (a.note) li.append(el("span", "muted", `· ${a.note}`));
+  if (a.kind === "session" && a.names?.length) li.append(el("span", "span-work", `Working on ${a.names.join(", ")}. At the end I'll ask what you finished.`));
+  return li;
+}
+
+async function applyChange(body) {
+  try {
+    const r = await post("/api/adjust", body);
+    movedIds = new Set([...r.moved.map((m) => m.id), ...r.placed.map((m) => m.id)]);
+    renderedKeys.week = "";
+    toast(changeText(r), 9000);
+    await refresh(true);
+    return true;
+  } catch (e) {
+    toast(e.message);
+    return false;
+  }
 }
 
 $("#avail-say").addEventListener("submit", async (e) => {
@@ -667,6 +824,14 @@ $("#avail-say").addEventListener("submit", async (e) => {
   } finally {
     btn.textContent = "Adjust my week";
     btn.disabled = !state.config.model;
+  }
+});
+
+// Enter sends, Shift+Enter starts a new line.
+$("#avail-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    $("#avail-say").requestSubmit();
   }
 });
 
@@ -691,7 +856,7 @@ $("#avail-form").addEventListener("submit", async (e) => {
 
 async function loadCards() {
   try {
-    cards = await api("/api/cards");
+    cards = (await api("/api/cards")).map(typeset);
   } catch (e) {
     toast(e.message);
     return;
@@ -1524,9 +1689,11 @@ function notifyNew() {
   const keyOf = (b) => `${b.id}:${b.status}:${b.notified ?? 0}`;
   if (firstPoll) {
     state.checkin.forEach((b) => notified.add(keyOf(b)));
+    state.reviews.forEach((r) => notified.add(`review:${r.id}`));
     firstPoll = false;
     return;
   }
+  notifyReviews();
   const fresh = state.checkin.filter((b) => !notified.has(keyOf(b)));
   // Focus mode's Do Not Disturb: these wait in the check-in list instead of interrupting.
   if (pdQuiet()) return void fresh.forEach((b) => notified.add(keyOf(b)));
@@ -1556,12 +1723,39 @@ function notifyNew() {
   }
 }
 
+// A work session just ended: "What did you finish?" Push brings it when this browser has push;
+// otherwise the open page shows it, with the same buttons sw.js gives a pushed one.
+function notifyReviews() {
+  for (const r of state.reviews) {
+    const key = `review:${r.id}`;
+    if (notified.has(key)) continue;
+    notified.add(key);
+    if (pdQuiet()) continue;
+    toast(`${pdCap(r.note)} is over. What did you finish?`, 6000);
+    flash(document.getElementById(`review-${r.id}`));
+    if (notifyPermission() !== "granted" || pushState === "on") continue;
+    const ids = r.items.map((i) => i.assignment_id);
+    const actions = [
+      { action: "all_done", title: "Finished them all", post: `/api/sessions/${r.id}/review`, body: { finished: ids } },
+      { action: "open", title: "Some aren't done" },
+    ];
+    showLocalNotification(`${pdCap(r.note)} is over`, {
+      body: `What did you finish? ${r.items.map((i) => i.name).join(", ")}.`,
+      tag: `session-${r.id}`,
+      data: { url: `/?review=${r.id}`, session_id: r.id, kind: "review", actions },
+      requireInteraction: true,
+      actions: actions.map(({ action, title }) => ({ action, title })),
+    });
+  }
+}
+
 // Answered somewhere else (another device, a notification button): its notification goes too.
 async function closeAnswered() {
   const reg = await swReady;
   if (!reg?.getNotifications) return;
-  const live = new Set(state.checkin.map((b) => `block-${b.id}`));
+  const live = new Set([...state.checkin.map((b) => `block-${b.id}`), ...state.reviews.map((r) => `session-${r.id}`)]);
   try {
+    (await reg.getNotifications()).forEach((n) => n.data?.kind === "review" && n.tag.startsWith("session-") && !live.has(n.tag) && n.close());
     (await reg.getNotifications()).forEach((n) => n.tag.startsWith("block-") && !live.has(n.tag) && n.close());
   } catch {}
 }
@@ -1571,7 +1765,8 @@ const PAGE_TITLE = "warmstart · Less staring. More starting."; // as in index.h
 let titleTimer = null;
 let titleFlip = false;
 function updateTitle() {
-  const base = state.checkin.length ? `(${state.checkin.length}) ${PAGE_TITLE}` : PAGE_TITLE;
+  const waiting = state.checkin.length + state.reviews.length;
+  const base = waiting ? `(${waiting}) ${PAGE_TITLE}` : PAGE_TITLE;
   const miss = state.checkin.find((b) => b.status === "missed");
   if (!miss) {
     clearInterval(titleTimer);
@@ -1636,6 +1831,10 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", async (e) => {
     if (e.data?.type === "pushed") return void pushedAt.set(e.data.tag, Date.now());
     if (e.data?.type === "answered") return refresh(true);
+    if (e.data?.type === "open-review") {
+      await refresh(true);
+      return flash(document.getElementById(`review-${e.data.sessionId}`));
+    }
     if (e.data?.type !== "open-block") return;
     await refresh(true);
     focusBlock(e.data.blockId);
@@ -1666,6 +1865,11 @@ async function boot() {
   if (blockId) {
     history.replaceState(null, "", "/");
     focusBlock(blockId);
+  }
+  const reviewId = params.get("review"); // a work session's "what did you finish?"
+  if (reviewId) {
+    history.replaceState(null, "", "/");
+    flash(document.getElementById(`review-${reviewId}`));
   }
 
   setInterval(renderClock, 1000);

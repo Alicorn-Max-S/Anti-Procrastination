@@ -26,7 +26,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from pydantic import BaseModel, Field
@@ -577,10 +577,25 @@ def _read_one(item: tuple[str, str, str, DocKind], folder: Path) -> Doc:
         return Doc(name=label, url=url, kind=kind, reason=f"download failed ({type(e).__name__})")
 
 
+def own_file_url(assignment_id: int, name: str) -> str:
+    """Where the page opens one of the student's own uploads (main.py serves it)."""
+    return f"/api/own-files/{assignment_id}/{quote(name)}"
+
+
+def _own_files(assignment: Assignment) -> list[Doc]:
+    """Files the student uploaded with their own work (added.py), read like a downloaded one."""
+    out = []
+    for rel in assignment.local_files:
+        path = Path(settings.files_dir) / rel
+        out.append(read_document(path, name=path.name, url=own_file_url(assignment.id, path.name), kind="file"))
+    return out
+
+
 def read_assignment(assignment: Assignment) -> list[Doc]:
     """Every document the assignment points at, read (or not, with the reason): the student's
-    Google Assignments copy first, then embedded docs, then the rest in description order."""
-    copies = _assignment_copies(assignment)
+    Google Assignments copy (or their own uploads) first, then embedded docs, then the rest in
+    description order."""
+    copies = _assignment_copies(assignment) + _own_files(assignment)
     items = _plan(assignment)
     if not items:
         return copies

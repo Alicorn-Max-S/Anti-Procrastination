@@ -91,10 +91,10 @@
           <h1>Week</h1>
         </div>
         <div class="panel avail">
-          <h3>When can you work?</h3>
-          <p class="muted small">Say when you can't (or can) work and the week moves around it now, before a start is missed. "I can't work Tuesday after 5, soccer." "I'm free Saturday morning."</p>
+          <h3>Change the plan</h3>
+          <p class="muted small">Say what's going on in your own words. You see what changes before anything moves. "I can't work Tuesday after 5, soccer." "Math tutoring at 1, I'll do my STEM work there. Put my humanities around it." "Move the history doc to Saturday morning." "I finished the reading."</p>
           <form id="avail-say" class="row wrap">
-            <input id="avail-text" type="text" maxlength="500" autocomplete="off" placeholder="I can't work tomorrow after 5, I have soccer" aria-label="When you can or can't work" required />
+            <textarea id="avail-text" rows="2" maxlength="1000" autocomplete="off" placeholder="Math tutoring at 1, I'll do my STEM work there. Put my humanities around it." aria-label="What's going on with your time or your work" required></textarea>
             <button id="avail-say-btn" type="submit" class="primary">Adjust my week</button>
           </form>
           <div id="avail-proposal" class="avail-proposal" aria-live="polite" hidden></div>
@@ -115,7 +115,7 @@
           <ul id="avail-list" class="avail-list"></ul>
         </div>
         <div id="week" class="week"></div>
-        <p class="muted small">Blocks sit between your work hours, or in time you said you can work. When you miss one, pick a new time, or say you can't work, the rest of the week moves to make room.</p>
+        <p class="muted small">Blocks sit between your work hours, or in time you said you can work, in the order things are due. When you miss one, pick a new time, or say you can't work, the rest of the week moves to make room. A time you pick yourself stays put.</p>
       </section>
 
       <section id="tab-dashboard" class="tab-panel" hidden>

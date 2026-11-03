@@ -113,3 +113,15 @@ def test_practice_without_model_keeps_focus(conn):
     card = PrepCard(assignment_id=2, kind="test", summary="", first_step="x", steps=[])
     out = practice.add_practice(conn, Assignment(id=2, course_id=1, name="Quiz"), card)
     assert out.practice == [] and "pret imp (fill in blank)" in out.focus
+
+
+def test_quote_marks_come_out_as_matched_pairs():
+    from app.prep import smart_quotes
+
+    # straight quotes look the same at both ends in the page's font; the model also opens with “ twice
+    assert smart_quotes('Ms. Rivera wrote "Record what you saw." and \'It reacted\' isn\'t one.') == (
+        "Ms. Rivera wrote “Record what you saw.” and ‘It reacted’ isn’t one."
+    )
+    assert smart_quotes("asks you to “show all of your steps“ for every step") == "asks you to “show all of your steps” for every step"
+    assert smart_quotes('”Units” (and "labels")') == "“Units” (and “labels”)"
+    assert smart_quotes("no quotes at all") == "no quotes at all"

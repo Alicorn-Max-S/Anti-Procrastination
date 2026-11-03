@@ -45,10 +45,18 @@ CREATE TABLE IF NOT EXISTS pings (
 );
 CREATE TABLE IF NOT EXISTS availability (  -- availability.py: what the student said they can / can't do
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,           -- 'off' (can't work) or 'open' (can work, even outside the usual hours)
+    kind TEXT NOT NULL,           -- 'off' (can't work), 'open' (can work, even outside the usual hours)
+                                  -- or 'session' (a stretch for the work in `assignments`)
     start TEXT NOT NULL,
     end TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT ''
+    note TEXT NOT NULL DEFAULT '',
+    assignments TEXT NOT NULL DEFAULT '[]'  -- sessions: JSON list of assignment ids
+);
+CREATE TABLE IF NOT EXISTS added (  -- added.py: work the student put on the list by hand
+    assignment_id INTEGER PRIMARY KEY,
+    finish_by TEXT,               -- when they want it done (stands in for the due date when planning)
+    added_at TEXT NOT NULL,
+    ref TEXT NOT NULL DEFAULT ''  -- where it came from, e.g. 'module:COURSE:ITEM', so it isn't added twice
 );
 CREATE TABLE IF NOT EXISTS test_rows (   -- filled by grader.py: one row per graded question
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,6 +92,9 @@ LATER_COLUMNS = [
     ("test_rows", "correct", "INTEGER"),
     ("test_rows", "bonus", "INTEGER NOT NULL DEFAULT 0"),
     ("test_rows", "estimated", "INTEGER NOT NULL DEFAULT 0"),
+    ("blocks", "pinned", "INTEGER NOT NULL DEFAULT 0"),
+    ("blocks", "session_id", "INTEGER"),
+    ("availability", "assignments", "TEXT NOT NULL DEFAULT '[]'"),
 ]
 
 
@@ -131,19 +142,83 @@ def save_assignment(conn: sqlite3.Connection, a: Assignment) -> None:
     conn.commit()
 
 
+def _with_added(a: Assignment, finish_by: str | None) -> Assignment:
+    """An assignment the student added by hand: its finish-by time stands in for the due date
+    everywhere the planner looks, and an added Canvas assignment keeps Canvas's date beside it."""
+    finish = datetime.fromisoformat(finish_by) if finish_by else None
+    update: dict = {"added": True}
+    if finish is not None:
+        update["due_at"] = finish
+        if a.origin == "canvas":
+            update["canvas_due_at"] = a.due_at
+    return a.model_copy(update=update)
+
+
+def _load_assignments(conn: sqlite3.Connection, rows) -> list[Assignment]:
+    added = {r["assignment_id"]: r["finish_by"] for r in conn.execute("SELECT assignment_id, finish_by FROM added")}
+    out = []
+    for r in rows:
+        a = Assignment.model_validate_json(r["data"])
+        out.append(_with_added(a, added[a.id]) if a.id in added else a)
+    return out
+
+
+def due_key(a: Assignment) -> tuple:
+    """Soonest due first, no due date last. Sorted on real datetimes: the stored text carries
+    different UTC offsets (Canvas's Z, local times, a clock change), so it doesn't sort as text."""
+    return (a.due_at is None, a.due_at.timestamp() if a.due_at else 0.0, a.id)
+
+
 def list_assignments(conn: sqlite3.Connection, course_id: int | None = None) -> list[Assignment]:
     sql = "SELECT data FROM assignments"
     args: tuple = ()
     if course_id is not None:
         sql += " WHERE course_id = ?"
         args = (course_id,)
-    rows = conn.execute(sql + " ORDER BY due_at IS NULL, due_at", args).fetchall()
-    return [Assignment.model_validate_json(r["data"]) for r in rows]
+    return sorted(_load_assignments(conn, conn.execute(sql, args).fetchall()), key=due_key)
 
 
 def get_assignment(conn: sqlite3.Connection, assignment_id: int) -> Assignment | None:
     row = conn.execute("SELECT data FROM assignments WHERE id = ?", (assignment_id,)).fetchone()
-    return Assignment.model_validate_json(row["data"]) if row else None
+    return _load_assignments(conn, [row])[0] if row else None
+
+
+def delete_assignment(conn: sqlite3.Connection, assignment_id: int) -> None:
+    """An added-by-hand item, with its card, blocks, their pings and its added row."""
+    conn.execute("DELETE FROM pings WHERE block_id IN (SELECT id FROM blocks WHERE assignment_id = ?)", (assignment_id,))
+    for table, column in (("blocks", "assignment_id"), ("prep_cards", "assignment_id"), ("added", "assignment_id"), ("assignments", "id")):
+        conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (assignment_id,))
+    conn.commit()
+
+
+def next_manual_id(conn: sqlite3.Connection) -> int:
+    """Ids for added-by-hand items count down from -1, so they never meet a Canvas id."""
+    row = conn.execute("SELECT MIN(id) AS low FROM assignments").fetchone()
+    return min(-1, (row["low"] or 0) - 1)
+
+
+# ---- work added by hand -----------------------------------------------------------------------
+
+
+def save_added(conn: sqlite3.Connection, assignment_id: int, finish_by: datetime | None, added_at: datetime, ref: str = "") -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO added (assignment_id, finish_by, added_at, ref) VALUES (?, ?, ?, ?)",
+        (assignment_id, _iso(finish_by), added_at.isoformat(), ref),
+    )
+    conn.commit()
+
+
+def list_added(conn: sqlite3.Connection) -> dict[int, dict]:
+    """assignment id -> {finish_by, added_at, ref}."""
+    return {
+        r["assignment_id"]: {"finish_by": r["finish_by"], "added_at": r["added_at"], "ref": r["ref"]}
+        for r in conn.execute("SELECT * FROM added")
+    }
+
+
+def delete_added(conn: sqlite3.Connection, assignment_id: int) -> None:
+    conn.execute("DELETE FROM added WHERE assignment_id = ?", (assignment_id,))
+    conn.commit()
 
 
 # ---- prep cards -------------------------------------------------------------------------------
@@ -174,16 +249,16 @@ def get_card(conn: sqlite3.Connection, assignment_id: int) -> PrepCard | None:
 
 def save_block(conn: sqlite3.Connection, b: Block) -> int:
     """Insert a block, or update it if it already has an id. Returns the id."""
-    values = (b.assignment_id, b.start.isoformat(), b.end.isoformat(), b.status, int(b.at_risk))
+    values = (b.assignment_id, b.start.isoformat(), b.end.isoformat(), b.status, int(b.at_risk), int(b.pinned), b.session_id)
     if b.id is None:
         cur = conn.execute(
-            "INSERT INTO blocks (assignment_id, start, end, status, at_risk) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO blocks (assignment_id, start, end, status, at_risk, pinned, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             values,
         )
         conn.commit()
         return int(cur.lastrowid)
     conn.execute(
-        "UPDATE blocks SET assignment_id=?, start=?, end=?, status=?, at_risk=? WHERE id=?",
+        "UPDATE blocks SET assignment_id=?, start=?, end=?, status=?, at_risk=?, pinned=?, session_id=? WHERE id=?",
         (*values, b.id),
     )
     conn.commit()
@@ -191,8 +266,9 @@ def save_block(conn: sqlite3.Connection, b: Block) -> int:
 
 
 def list_blocks(conn: sqlite3.Connection) -> list[Block]:
-    rows = conn.execute("SELECT * FROM blocks ORDER BY start").fetchall()
-    return [Block.model_validate(dict(r)) for r in rows]
+    """In time order (sorted on real datetimes, not the stored text: see due_key)."""
+    rows = conn.execute("SELECT * FROM blocks").fetchall()
+    return sorted((Block.model_validate(dict(r)) for r in rows), key=lambda b: (b.start.timestamp(), b.id))
 
 
 def get_block(conn: sqlite3.Connection, block_id: int) -> Block | None:
@@ -210,27 +286,33 @@ def delete_block(conn: sqlite3.Connection, block_id: int) -> None:
 
 def save_availability(conn: sqlite3.Connection, a: Availability) -> int:
     """Insert a span (no id) or update it; returns the id."""
-    values = (a.kind, a.start.isoformat(), a.end.isoformat(), a.note)
+    values = (a.kind, a.start.isoformat(), a.end.isoformat(), a.note, json.dumps(a.assignment_ids))
     if a.id is None:
-        cur = conn.execute("INSERT INTO availability (kind, start, end, note) VALUES (?, ?, ?, ?)", values)
+        cur = conn.execute("INSERT INTO availability (kind, start, end, note, assignments) VALUES (?, ?, ?, ?, ?)", values)
         conn.commit()
         return int(cur.lastrowid)
-    conn.execute("UPDATE availability SET kind=?, start=?, end=?, note=? WHERE id=?", (*values, a.id))
+    conn.execute("UPDATE availability SET kind=?, start=?, end=?, note=?, assignments=? WHERE id=?", (*values, a.id))
     conn.commit()
     return a.id
+
+
+def _span(row) -> Availability:
+    d = dict(row)
+    d["assignment_ids"] = json.loads(d.pop("assignments", None) or "[]")
+    return Availability.model_validate(d)
 
 
 def list_availability(conn: sqlite3.Connection, since: datetime | None = None) -> list[Availability]:
     """Spans in time order; with `since`, only those that haven't ended by then. (Filtered here, not in
     SQL: the stored times carry different UTC offsets across a clock change, so they don't sort as text.)"""
     rows = conn.execute("SELECT * FROM availability").fetchall()
-    spans = [Availability.model_validate(dict(r)) for r in rows]
+    spans = [_span(r) for r in rows]
     return sorted((a for a in spans if since is None or a.end > since), key=lambda a: a.start)
 
 
 def get_availability(conn: sqlite3.Connection, availability_id: int) -> Availability | None:
     row = conn.execute("SELECT * FROM availability WHERE id = ?", (availability_id,)).fetchone()
-    return Availability.model_validate(dict(row)) if row else None
+    return _span(row) if row else None
 
 
 def delete_availability(conn: sqlite3.Connection, availability_id: int) -> None:

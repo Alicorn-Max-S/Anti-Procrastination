@@ -1,7 +1,7 @@
 // Service worker: shows start-time pushes with the check-in's buttons, answers from those buttons, opens the right check-in on tap, and keeps the page shell cached so the
 // installed app opens without a network. Served at /sw.js for full scope.
 
-const CACHE = "warmstart-v8";
+const CACHE = "warmstart-v9";
 const SHELL = ["/", "/static/app.js", "/static/prepdoc.js", "/static/theme.js", "/static/style.css", "/static/prepdoc.css", "/static/manifest.webmanifest", "/static/icons/icon-192.png", "/static/icons/badge-96.png", "/static/brand/app-icon.svg"];
 const ICON = "/static/icons/icon-192.png";
 // The status-bar badge: Android draws only its alpha, so it is the white mark on transparent.
@@ -50,9 +50,13 @@ const ACTIONS = [
 // A ping or a missed start (the server sends `kind`, `block_id`, `renotify` and `actions`, the
 // same buttons as the check-in on the page) gets the buttons and a buzz; Chrome on a laptop shows
 // the first two. A missed start stays on screen until answered, and a reminder alerts again under
-// the same tag. app.js's notifyOptions matches this for the notifications the page shows.
+// the same tag. app.js's notifyOptions matches this for the notifications the page shows. A work
+// session's end ("What did you finish?", `kind` "review") stays up too, with its own buttons.
 function options(data) {
   const opts = { body: data.body, tag: data.tag || undefined, icon: ICON, badge: BADGE, data };
+  if (data.kind === "review") {
+    return { ...opts, actions: (data.actions || []).map(({ action, title }) => ({ action, title })), requireInteraction: true, vibrate: [200, 100, 200] };
+  }
   if (!data.block_id) return opts;
   const missed = data.kind === "missed";
   return {
@@ -104,15 +108,30 @@ self.addEventListener("notificationclick", (event) => {
   const url = data.url || "/";
   const blockId = data.block_id || new URL(url, location.origin).searchParams.get("block");
   const chosen = event.action ? (data.actions || ACTIONS).find((a) => a.action === event.action) : null;
-  event.waitUntil(chosen?.answer && blockId ? answerFromNotification(blockId, chosen, url) : openPage(url, blockId));
+  const reviewId = data.kind === "review" ? data.session_id : null; // a session's start opens its first prep doc instead
+  if (chosen?.post) return event.waitUntil(postFromNotification(chosen, url, reviewId));
+  event.waitUntil(chosen?.answer && blockId ? answerFromNotification(blockId, chosen, url) : openPage(url, blockId, reviewId));
 });
 
-async function openPage(url, blockId) {
+async function openPage(url, blockId, sessionId) {
   const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const open = wins.find((w) => new URL(w.url).origin === location.origin);
   if (!open) return self.clients.openWindow(url);
   await open.focus();
-  if (blockId) open.postMessage({ type: "open-block", blockId });
+  if (sessionId) open.postMessage({ type: "open-review", sessionId });
+  else if (blockId) open.postMessage({ type: "open-block", blockId });
+}
+
+// A button that carries its own request (a work session's "Finished them all"): post it, and open
+// the page instead if that fails.
+async function postFromNotification(chosen, url, sessionId) {
+  try {
+    const res = await fetch(chosen.post, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(chosen.body || {}) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch {
+    return openPage(url, null, sessionId);
+  }
+  await tellPages({ type: "answered" });
 }
 
 // Posts the check-in like the page does. The subscription's endpoint tells the server which
