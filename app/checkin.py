@@ -164,7 +164,9 @@ def apply_answer(
     else:
         raise ValueError(f"unknown answer {answer!r}")
 
-    moved = target.model_copy(update={"start": start, "end": start + length, "status": status})
+    # A time the student chose stays theirs: due_order never moves it.
+    pinned = target.pinned or answer in ("plus_15", "pick_time")
+    moved = target.model_copy(update={"start": start, "end": start + length, "status": status, "pinned": pinned})
     record = (ping or Ping(block_id=block_id, sent_at=now)).model_copy(
         update={
             "answer": answer,
@@ -186,16 +188,16 @@ def reflow(
 ) -> list[Block]:
     """Resolve overlaps and anything now in the past after a change. Order by start.
 
-    Pinged and started blocks and the `pinned` block (the one just answered) stay put; other
-    planned blocks only move if they overlap one of those, overlap time the student said they
-    can't work (`avail`), or start before `now`.
+    Pinged and started blocks, work-session blocks and the `pinned` block (the one just answered)
+    stay put; other planned blocks only move if they overlap one of those, overlap time the student
+    said they can't work (`avail`), or start before `now`.
     """
     window = window or default_window()
     due = due or {}
     open_ = open_times(avail)
     fixed, movable, rest = [], [], []
     for b in blocks:
-        if b.id == pinned or b.status in ("pinged", "started"):
+        if b.id == pinned or b.status in ("pinged", "started") or (b.session_id is not None and b.status == "planned"):
             fixed.append(b)
         elif b.status == "planned":
             movable.append(b)

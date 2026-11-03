@@ -55,7 +55,7 @@ def client(conn):
 def test_a_quiet_clock_change_names_the_next_start(client):
     # Max's case: 4:30 AM instead of PM. Nothing fires, and the reply says what's next.
     r = set_clock(client, at(2, 4, 30))
-    assert r["events"] == {"pinged": [], "missed": [], "new": [], "nagged": []}
+    assert r["events"] == {"pinged": [], "missed": [], "new": [], "nagged": [], "sessions": [], "reviews": []}
     assert r["next_start"]["id"] == 1 and r["next_start"]["name"] == "Problem Set 6: Logarithms"
     assert state(client)["next_start"]["id"] == 1
 
@@ -179,9 +179,12 @@ def test_push_setup_endpoint(client):
 # ---- notifying an unanswered miss again ----------------------------------------------------------
 
 
-def test_an_unanswered_miss_notifies_again_three_times_then_stops(client):
+def test_an_unanswered_miss_notifies_again_three_times_then_stops(client, conn):
     set_clock(client, at(2, 15))
-    clock(client, action="advance", minutes=20)  # block 1 missed at 3:20
+    r = clock(client, action="advance", minutes=20)  # block 1 missed at 3:20
+    # its new block goes ahead of the lab, at 4 PM; move it to the evening so only reminders ask
+    new = db.get_block(conn, r["events"]["new"][0])
+    db.save_block(conn, new.model_copy(update={"start": at(2, 20), "end": at(2, 21), "pinned": True}))
     nagged = []
     for _ in range(5):
         nagged.append(clock(client, action="advance", minutes=10)["events"]["nagged"])
@@ -230,7 +233,7 @@ def test_checkin_offers_in_15_and_the_next_work_time(client):
     assert datetime.fromisoformat(pending["choices"][1]["start"]) == at(2, 18)  # 3:45 runs into block 2, 5:30 into the practice
 
 
-def test_notifications_carry_the_checkin_buttons(client, monkeypatch):
+def test_notifications_carry_the_checkin_buttons(client, conn, monkeypatch):
     sent = []
     monkeypatch.setattr(push, "send_ping", lambda conn, title, body, url="/", tag="", extra=None, skip="": sent.append((title, body, extra)))
     set_clock(client, at(2, 15))  # block 1 (3 PM) pinged
@@ -238,12 +241,22 @@ def test_notifications_carry_the_checkin_buttons(client, monkeypatch):
     titles = [a["title"] for a in extra["actions"]]
     assert titles == ["Start now", "In 15 min · Mon 3:15 PM", "Next work time · Mon 6:00 PM", "Pick a time…"]
     assert [a.get("answer") for a in extra["actions"]] == ["start_now", "plus_15", "pick_time", None]
-    clock(client, action="advance", minutes=20)  # missed at 3:20; a new block is planned at once
+    r = clock(client, action="advance", minutes=20)  # missed at 3:20; a new block is planned at once
     title, body, extra = sent[-1]
     assert title == "Missed start: Problem Set 6: Logarithms" and body == "Planned for Mon 3:00 PM. When will you start?"
     [pending] = [b for b in state(client)["checkin"] if b["id"] == 1]
+    # the new block goes ahead of the lab (due a day later) at 4 PM, within half an hour of
+    # "In 15 min", so that's the one-tap time, on the notification as on the page
+    assert datetime.fromisoformat(pending["replacement"]["start"]) == at(2, 16)
+    assert [c["key"] for c in pending["choices"]] == ["in_15"]
+    assert [a["title"] for a in extra["actions"]] == ["Start now", "In 15 min · Mon 3:35 PM", "Pick a time…"]
+    # a new block further off is offered as the next work time, and the button keeps it there
+    new = db.get_block(conn, r["events"]["new"][0])
+    db.save_block(conn, new.model_copy(update={"start": at(2, 20), "end": at(2, 21), "pinned": True}))
+    clock(client, action="advance", minutes=10)  # the reminder
+    _, _, extra = sent[-1]
     nxt = next(a for a in extra["actions"] if a["action"] == "next")
-    assert nxt["title"] == f"Next work time · {loop.when(datetime.fromisoformat(pending['replacement']['start']))}"
+    assert nxt["title"] == "Next work time · Mon 8:00 PM"
     assert nxt["answer"] == "keep"  # it's already there, so the button keeps it rather than moving it
 
 
@@ -254,8 +267,8 @@ def test_preview_says_what_moves_without_saving(client):
     assert r.status_code == 200
     body = r.json()
     assert datetime.fromisoformat(body["block"]["start"]) == at(2, 16)
-    [shifted] = body["moved"]
-    assert shifted["id"] == 2 and datetime.fromisoformat(shifted["start"]) == at(2, 18)  # after the 5:30 quiz practice
+    # the lab makes room after the 5:30 quiz practice, then, due a day before the quiz, goes ahead of it
+    assert [(m["id"], datetime.fromisoformat(m["start"])) for m in body["moved"]] == [(2, at(2, 17, 30)), (3, at(2, 19))]
     assert {b["id"]: b["start"] for b in state(client)["blocks"]} == before  # nothing saved
 
 

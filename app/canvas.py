@@ -10,6 +10,9 @@ Endpoints (from the build plan):
   GET /api/v1/courses/:id/assignments/:id/submissions/self
         ?include[]=submission_comments&include[]=rubric_assessment
   GET /api/v1/courses/:id/files/:id           -> download URL for a file linked in a description
+  GET /api/v1/courses/:id/modules?include[]=items, and /modules/:id/items when Canvas leaves a
+        module's items out (it may, for big modules); /modules/:id/items/:id for one item. Only
+        when the student opens "Add work" (added.py): Modules aren't synced.
 
 Run `python -m app.canvas` to check your token. Never commit raw responses (public repo).
 """
@@ -314,6 +317,43 @@ def fetch_file(api_endpoint: str, dest_dir: Path, client: httpx.Client | None = 
 def download_file(api_endpoint: str, dest_dir: Path) -> Path | None:
     """Download a Canvas file (given its API endpoint) into dest_dir. None if it's too big or gone."""
     return fetch_file(api_endpoint, dest_dir).path
+
+
+def fetch_assignment(course_id: int, assignment_id: int, client: httpx.Client | None = None) -> Assignment | None:
+    """One assignment (a Modules item that is one, when the last sync didn't have it)."""
+    with _session(client) as c:
+        r = _get(c, f"/api/v1/courses/{course_id}/assignments/{assignment_id}", params=[("include[]", "submission")])
+    return assignment_from_json(course_id, r.json()) if r.status_code == 200 else None
+
+
+def fetch_modules(course_id: int, client: httpx.Client | None = None) -> list[dict]:
+    """The course's modules in order, each with its items (fetched separately when Canvas leaves
+    them out of the list)."""
+    with _session(client) as c:
+        modules = _get_all(c, f"/api/v1/courses/{course_id}/modules", [("include[]", "items")])
+        for m in modules:
+            if m.get("items") is None:
+                m["items"] = _get_all(c, f"/api/v1/courses/{course_id}/modules/{m['id']}/items", [])
+    return modules
+
+
+def fetch_module_item(course_id: int, module_id: int, item_id: int, client: httpx.Client | None = None) -> dict | None:
+    with _session(client) as c:
+        r = _get(c, f"/api/v1/courses/{course_id}/modules/{module_id}/items/{item_id}")
+    return r.json() if r.status_code == 200 else None
+
+
+def fetch_json(url: str, client: httpx.Client | None = None) -> dict | None:
+    """Any Canvas API object by its URL (a Modules item's `url`), or None if it can't be read."""
+    with _session(client) as c:
+        r = _get(c, url)
+    if r.status_code != 200:
+        return None
+    try:
+        data = r.json()
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def fetch_page(course_id: int, slug: str) -> dict | None:

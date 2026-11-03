@@ -296,6 +296,8 @@ def known_links(assignment: Assignment) -> list[Link]:
     _, links, _ = canvas.parse_description(assignment.description_html)
     if assignment.html_url:
         label = "Open in Google Assignments (via Canvas)" if uses_google_assignments(assignment) else "Assignment on Canvas"
+        if assignment.origin == "module":
+            label = "Open in Canvas"
         links.append(Link(label=label, url=assignment.html_url))
     return links
 
@@ -325,7 +327,19 @@ def _attachments(assignment: Assignment) -> tuple[list[Path], list[SourceFile], 
 def _due_text(assignment: Assignment) -> str:
     if not assignment.due_at:
         return "no due date"
-    return as_local(assignment.due_at).strftime("%A %b %d, %I:%M %p")
+    when = as_local(assignment.due_at).strftime("%A %b %d, %I:%M %p")
+    if assignment.canvas_due_at:
+        was = as_local(assignment.canvas_due_at).strftime("%A %b %d")
+        return f"{when} (the student's own target: it was due {was} on Canvas, so they're catching up)"
+    return when
+
+
+_ORIGIN = {
+    "canvas": "a Canvas assignment",
+    "module": "an item from the class's Canvas Modules, not an assignment; the student added it to catch up "
+    "(often work from a class they missed). There may be nothing to turn in.",
+    "own": "the student's own task, added by hand with their own notes and files. There's no Canvas page.",
+}
 
 
 # "KEY: Unit Vectors Practice", "Test Review KEY", "Key - Lab 3", "Answer Key", "Answers to the
@@ -388,8 +402,9 @@ def _prompt(
     )
     read_names = read_names or [f.name for f in files]
     keys = [n for n in read_names if is_answer_key(n)]
-    return f"""Course: {course_name}
+    return f"""Course: {course_name or "(none given)"}
 Assignment: {assignment.name}
+What it is: {_ORIGIN[assignment.origin]}
 Kind guessed from the title only (often wrong): {assignment.kind}
 Due: {_due_text(assignment)}
 Points: {assignment.points_possible if assignment.points_possible is not None else "unknown"}
@@ -474,9 +489,19 @@ def fallback_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     where = _WHERE[notes_medium(conn, assignment.course_id)].format(name=assignment.name)
     first_step = _FALLBACK_FIRST_STEP[assignment.kind].format(name=assignment.name, where=where)
     seen = bool(text.strip())
+    files = [Path(f).name for f in assignment.local_files]
     if not seen:
         summary = f"{assignment.name}: the instructions weren't readable here, so this card is from the title only."
         first_step = "Open the assignment on Canvas and find the handout or instructions on that page, then open them."
+    if assignment.origin == "module" and not seen:
+        first_step = f"Open {assignment.name} in Canvas Modules and read its first instruction."
+    if assignment.origin == "own":
+        seen = seen or bool(files)
+        if files:
+            first_step = f"Open {files[0]} and read its first instruction."
+        elif not text.strip():
+            summary = assignment.name
+            first_step = f"Write the first thing {assignment.name} needs, in one line, on {where}."
     if uses_google_assignments(assignment):
         first_step = "Open the assignment on Canvas and click through to Google Assignments to open your copy of the doc."
     return PrepCard(
@@ -602,6 +627,38 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     )
 
 
+_OPENS_AFTER = "([{—–-/"
+
+
+def smart_quotes(text: str) -> str:
+    """Quote marks as a matched pair, whatever the model typed (straight ones, or “ at both ends):
+    an opening mark at the start or after a space or bracket, a closing one everywhere else, and an
+    apostrophe inside a word. In the page's font, straight quotes are the same wedge on both sides."""
+    out = []
+    for i, ch in enumerate(text):
+        prev = out[-1] if out else ""
+        after_gap = not prev or prev.isspace() or prev in _OPENS_AFTER
+        if ch in '"“”':
+            out.append("“" if after_gap or prev == "‘" else "”")
+        elif ch in "'‘’":
+            nxt = text[i + 1] if i + 1 < len(text) else ""
+            out.append("‘" if (after_gap or prev == "“") and nxt and not nxt.isspace() else "’")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _typeset(card: PrepCard) -> PrepCard:
+    return card.model_copy(
+        update={
+            "summary": smart_quotes(card.summary),
+            "first_step": smart_quotes(card.first_step),
+            "steps": [smart_quotes(s) for s in card.steps],
+            "watch_out": smart_quotes(card.watch_out),
+        }
+    )
+
+
 def build_prep_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
     """Generate and store the card for one assignment. If the model call fails, the template card
     is saved with the reason in `model_error`."""
@@ -617,15 +674,17 @@ def build_prep_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCar
         card = fallback_card(conn, assignment).model_copy(update={"model_error": error})
     if card.kind == "test":
         card = practice.add_practice(conn, assignment, card)
+    card = _typeset(card)
     db.save_card(conn, card)
     return card
 
 
 def upcoming(assignments: list[Assignment], now: datetime, horizon_days: int) -> list[Assignment]:
-    """Unsubmitted assignments due between now and the horizon, soonest first."""
+    """Unsubmitted assignments due between now and the horizon, plus work added by hand (whatever
+    its date), soonest first."""
     end = now + timedelta(days=horizon_days)
-    out = [a for a in assignments if not a.submitted and a.due_at and now < a.due_at <= end]
-    return sorted(out, key=lambda a: a.due_at)
+    out = [a for a in assignments if not a.submitted and (a.added or (a.due_at and now < a.due_at <= end))]
+    return sorted(out, key=db.due_key)
 
 
 def build_all_missing(

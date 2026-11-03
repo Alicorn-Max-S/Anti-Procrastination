@@ -9,6 +9,11 @@ quick task (a form, a signature) one QUICK_MINUTES block.
 
 What the student said about their time (`Availability`) shapes every search: time they can't work
 joins `busy`, and time they can work (`open_`) counts as working time on top of the daily window.
+A work session ("math tutoring, I'll do my STEM work there") is busy for everything but its own
+blocks, which availability.py places and the loop pings as one (never one by one).
+
+`due_order` keeps the week in the order things are due: a planned block for work due later never
+sits before one for work due sooner, unless the student put it there.
 """
 
 from datetime import datetime, timedelta
@@ -47,8 +52,8 @@ def overlapping(start: datetime, end: datetime, busy: Busy) -> Busy:
 
 
 def off_times(avail: list[Availability] | None) -> Busy:
-    """The spans the student said they can't work."""
-    return [(a.start, a.end) for a in avail or [] if a.kind == "off"]
+    """The spans the student said they can't work, and work sessions (other work keeps out of them)."""
+    return [(a.start, a.end) for a in avail or [] if a.kind in ("off", "session")]
 
 
 def open_times(avail: list[Availability] | None) -> Busy:
@@ -130,7 +135,11 @@ def nearest_slot(
 
 
 def _is_live(b: Block, now: datetime) -> bool:
-    """Active blocks, plus missed ones still waiting for a check-in answer."""
+    """Active blocks, plus missed ones still waiting for a check-in answer. A work session's block
+    stops counting when the session ends, so unfinished work gets a new block right away (the
+    end-of-session review marks what was finished done)."""
+    if b.session_id is not None and b.end <= now:
+        return False
     return b.status in ACTIVE or (b.status == "missed" and now - b.end < STALE_MISSED)
 
 
@@ -254,8 +263,12 @@ def plan_blocks(
 
 
 def due_ping(blocks: list[Block], now: datetime) -> Block | None:
-    """The block whose start time has arrived and hasn't been pinged yet, if any."""
-    due = [b for b in blocks if b.status == "planned" and b.start <= now < b.start + MAX_LATE_PING]
+    """The block whose start time has arrived and hasn't been pinged yet, if any. A work session's
+    blocks are pinged with their session, not here."""
+    due = [
+        b for b in blocks
+        if b.status == "planned" and b.session_id is None and b.start <= now < b.start + MAX_LATE_PING
+    ]
     return min(due, key=lambda b: b.start) if due else None
 
 
@@ -291,8 +304,109 @@ def mark_missed(blocks: list[Block], now: datetime, grace_minutes: int = 15) -> 
     grace = timedelta(minutes=grace_minutes)
     out = []
     for b in blocks:
+        if b.session_id is not None:
+            continue  # the session's review asks about these instead
         if (b.status == "pinged" and now > b.start + grace) or (
             b.status == "planned" and now >= b.start + MAX_LATE_PING
         ):
             out.append(b.model_copy(update={"status": "missed"}))
     return out
+
+
+# ---- earliest due first -----------------------------------------------------------------------
+
+
+def _movable(b: Block, now: datetime, due: dict[int, datetime]) -> bool:
+    """Blocks due_order may move: planned, not begun, not put there by the student, not in a session."""
+    return b.status == "planned" and b.start >= now and not b.pinned and b.session_id is None and b.assignment_id in due
+
+
+def _swap(
+    x: Block,
+    y: Block,
+    others: list[Block],
+    now: datetime,
+    due: dict[int, datetime],
+    window: Window,
+    off: Busy,
+    open_: Busy,
+    tests: set[int],
+) -> tuple[Block, Block] | None:
+    """New places for x (due later, earlier in the week) and y (due sooner, later): y takes x's
+    place (lined up by its start, else its end), and x goes right after it, else into y's place
+    (lined up by start, else end), whichever fits first. Both must stay in working time, clear of
+    everything else, and x must still end by its due date; a test's practice session keeps its
+    day and its distance from the test's other sessions. None if nothing fits."""
+    tz = local_tz()
+    lx, ly = x.end - x.start, y.end - y.start
+    busy = off + [(b.start, b.end) for b in others if b.status in ACTIVE]
+
+    def clear(block: Block, start: datetime, length: timedelta) -> bool:
+        end = start + length
+        if overlapping(start, end, busy) or not in_work_time(start, length, window, open_):
+            return False
+        if block.assignment_id in tests:
+            if start.astimezone(tz).date() != block.start.astimezone(tz).date():
+                return False
+            mine = [(o.start - PRACTICE_GAP, o.end + PRACTICE_GAP) for o in others if o.assignment_id == block.assignment_id]
+            if overlapping(start, end, mine):
+                return False
+        return True
+
+    for ys in dict.fromkeys((x.start, x.end - ly)):
+        for xs in dict.fromkeys((ys + ly, y.start, y.end - lx)):
+            if ys < now or (ys < xs + lx and xs < ys + ly):
+                continue
+            if xs + lx > due[x.assignment_id] or not (clear(y, ys, ly) and clear(x, xs, lx)):
+                continue
+            return (
+                x.model_copy(update={"start": xs, "end": xs + lx, "at_risk": False}),
+                y.model_copy(update={"start": ys, "end": ys + ly, "at_risk": ys + ly > due[y.assignment_id]}),
+            )
+    return None
+
+
+def due_order(
+    blocks: list[Block],
+    now: datetime,
+    due: dict[int, datetime],
+    window: Window | None = None,
+    avail: list[Availability] | None = None,
+    tests: set[int] | None = None,
+) -> list[Block]:
+    """Reorder planned blocks so work due sooner comes first; returns only the blocks that moved.
+
+    Walking the week in time order, a block followed by one for work due sooner trades places
+    with it (the soonest-due one that fits, see `_swap`). Only planned blocks that haven't begun
+    move; pinged, started and history blocks, blocks the student placed (`pinned`) and work-session
+    blocks stay where they are. `tests` are assignments whose blocks are practice sessions: those
+    only trade places within their own day, since each day before the test gets one."""
+    window = window or default_window()
+    off, open_ = off_times(avail), open_times(avail)
+    tests = tests or set()
+    blocks = [b for b in blocks if b.end > now]  # history can't be in the way
+    cur = {b.id: b for b in blocks}
+    moved: set[int] = set()
+    for _ in range(4 * len(blocks) ** 2 + 1):  # each swap undoes an inversion; the cap is a backstop
+        order = sorted((b for b in cur.values() if _movable(b, now, due)), key=lambda b: (b.start, b.id))
+        swapped = False
+        for i, x in enumerate(order):
+            sooner = sorted(
+                (y for y in order[i + 1:] if due[y.assignment_id] < due[x.assignment_id]),
+                key=lambda y: (due[y.assignment_id], y.start),
+            )
+            for y in sooner:
+                others = [b for b in cur.values() if b.id not in (x.id, y.id)]
+                pair = _swap(x, y, others, now, due, window, off, open_, tests)
+                if pair:
+                    for b in pair:
+                        cur[b.id] = b
+                        moved.add(b.id)
+                    swapped = True
+                    break
+            if swapped:
+                break
+        if not swapped:
+            break
+    before = {b.id: b for b in blocks}
+    return sorted((cur[i] for i in moved if (cur[i].start, cur[i].end) != (before[i].start, before[i].end)), key=lambda b: b.start)

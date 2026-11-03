@@ -13,8 +13,10 @@ AssignmentKind = Literal["lab", "reading", "problem_set", "essay", "test", "othe
 ASSIGNMENT_KINDS: tuple[str, ...] = AssignmentKind.__args__
 Effort = Literal["light", "medium", "heavy"]
 BlockStatus = Literal["planned", "pinged", "started", "missed", "done"]
-CheckinAnswer = Literal["start_now", "plus_15", "pick_time", "keep", "none"]  # keep: OK the new time after a miss
-AvailabilityKind = Literal["off", "open"]
+# keep: OK the new time after a miss. finished / unfinished: the review at the end of a work session.
+CheckinAnswer = Literal["start_now", "plus_15", "pick_time", "keep", "finished", "unfinished", "none"]
+AvailabilityKind = Literal["off", "open", "session"]
+Origin = Literal["canvas", "module", "own"]
 
 
 # ---- Canvas data -----------------------------------------------------------------------------
@@ -61,6 +63,14 @@ class Assignment(BaseModel):
     graded_at: datetime | None = None
     comments: list[SubmissionComment] = Field(default_factory=list)
     rubric: list[RubricScore] = Field(default_factory=list)
+    # Work the student added by hand (added.py). "module": a Canvas Modules item that isn't an
+    # assignment; "own": the student's own task and files. Both get negative ids. For an added
+    # Canvas assignment, db.py puts the student's finish-by time in `due_at` when it reads the row
+    # and keeps Canvas's own date in `canvas_due_at`.
+    origin: Origin = "canvas"
+    added: bool = False
+    canvas_due_at: datetime | None = None
+    local_files: list[str] = Field(default_factory=list)  # own uploads, relative to FILES_DIR
 
 
 # ---- Prep cards -------------------------------------------------------------------------------
@@ -149,17 +159,22 @@ class Block(BaseModel):
     end: datetime
     status: BlockStatus = "planned"
     at_risk: bool = False  # True when the block ends after the assignment is due
+    pinned: bool = False  # the student put it there (a picked time, "in 15", "do it Saturday"): never reordered
+    session_id: int | None = None  # inside a work session (an Availability of kind "session")
 
 
 class Availability(BaseModel):
     """Something the student said about when they can work. "off": they can't, so nothing is planned
-    in the span and planned blocks leave it. "open": they can, even outside the usual daily window."""
+    in the span and planned blocks leave it. "open": they can, even outside the usual daily window.
+    "session": they'll spend it on the work in `assignment_ids` (math tutoring, study hall); other
+    work keeps out of it like time off, and at its end they're asked what they finished."""
 
     id: int | None = None
     kind: AvailabilityKind
     start: datetime
     end: datetime
     note: str = ""  # their reason in their own words ("soccer"), shown next to the span
+    assignment_ids: list[int] = Field(default_factory=list)  # sessions only
 
 
 class Ping(BaseModel):

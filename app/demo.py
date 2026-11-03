@@ -298,6 +298,7 @@ def clear(conn) -> None:
     conn.execute("DELETE FROM pings WHERE block_id IN (SELECT id FROM blocks WHERE assignment_id BETWEEN ? AND ?)", ids)
     conn.execute("DELETE FROM blocks WHERE assignment_id BETWEEN ? AND ?", ids)
     conn.execute("DELETE FROM prep_cards WHERE assignment_id BETWEEN ? AND ?", ids)
+    conn.execute("DELETE FROM added WHERE assignment_id BETWEEN ? AND ?", ids)
     conn.execute("DELETE FROM assignments WHERE id BETWEEN ? AND ?", ids)
     conn.execute("DELETE FROM test_rows WHERE course_id BETWEEN ? AND ?", ids)
     conn.execute("DELETE FROM courses WHERE id BETWEEN ? AND ?", ids)

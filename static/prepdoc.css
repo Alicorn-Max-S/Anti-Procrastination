@@ -408,6 +408,72 @@ a.pd-file:hover .name { text-decoration-color: var(--pd-text); }
 .pd-focus .sr-only, .pd .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 body.pd-focus-open { overflow: hidden; }
 
+/* ---- the divider between a prep doc's two sides (prepdoc.js pdSplit) ---- */
+/* It takes the place of the 56px gap the design had between the columns. */
+.pd-row.split { column-gap: 0; }
+.pd-split {
+  flex: none;
+  align-self: stretch;
+  width: 56px;
+  min-height: 120px;
+  display: flex;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 6px;
+}
+.pd-split .grip { width: 2px; height: 100%; border-radius: 1px; background: transparent; transition: background-color 120ms ease-out; }
+.pd-split::before { content: ""; position: sticky; top: 45vh; width: 6px; height: 40px; margin-right: -4px; border-radius: 3px; background: var(--pd-line); align-self: flex-start; }
+.pd-split:hover .grip, .pd-split.dragging .grip, .pd-split:focus-visible .grip { background: var(--pd-graphic); }
+.pd-split:hover::before, .pd-split.dragging::before { background: var(--pd-graphic); }
+.pd-split:focus-visible { outline: 2px solid var(--pd-soft-text); outline-offset: -2px; }
+.pd-row.sized { flex-wrap: nowrap; }
+.pd-row.sized > .pd-main { flex: 1 1 0; min-width: 360px; }
+.pd-row.sized > .pd-side { flex: 0 0 calc((100% - 56px) * var(--pd-share)); min-width: 240px; }
+body.pd-resizing { cursor: col-resize; user-select: none; }
+@media (max-width: 959px) {
+  .pd-split { display: none; }
+  .pd-row.split { column-gap: 56px; }
+  .pd-row.sized { flex-wrap: wrap; }
+  .pd-row.sized > .pd-main { flex: 999 1 600px; min-width: 0; }
+  .pd-row.sized > .pd-side { flex: 1 1 280px; min-width: 0; }
+}
+
+/* ---- Add work (prepdoc.js pdAddPanel) ---- */
+.pd-add-row { display: flex; justify-content: flex-start; }
+.pd-add { display: flex; flex-direction: column; gap: 18px; padding: 24px; border-radius: 8px; background: var(--pd-tile); }
+.pd-add-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; }
+.pd-add-title { font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.015em; }
+.pd-add-head p { max-width: 640px; margin-top: 4px !important; }
+.pd-add > .pd-switch { order: 0; flex: none; align-self: flex-start; max-width: 100%; overflow-x: auto; background: var(--pd-fill); }
+.pd-add > .pd-switch button[aria-pressed="true"] { background: var(--pd-page); color: var(--pd-text); box-shadow: 0 1px 2px rgba(24, 24, 27, 0.12); }
+.pd-add-finish { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pd-add-finish .pd-input { width: auto; min-height: 44px; }
+.pd-add-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pd-add-body > .pd-input { min-height: 44px; max-width: 420px; }
+.pd-add-list { display: flex; flex-direction: column; max-height: 480px; overflow-y: auto; padding-right: 4px; }
+.pd-add-list > .pd-over { padding: 14px 0 6px; }
+.pd-add-item { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 10px 0; border-bottom: 1px solid var(--pd-line); }
+.pd-add-item .info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pd-add-item .course { display: flex; align-items: center; font-size: 13px; font-weight: 600; color: var(--pd-text2); }
+.pd-add-item .name { font-size: 17px; line-height: 23px; font-weight: 600; }
+.pd-add-item .pd-muted { font-size: 14px; }
+.pd-add-item .pd-btn { flex: none; }
+.pd-add-on { flex: none; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--pd-text2); }
+.pd-add-module { border-bottom: 1px solid var(--pd-line); }
+.pd-add-module summary { cursor: pointer; min-height: 48px; display: flex; align-items: center; font-weight: 700; }
+.pd-add-module .pd-add-item:last-child { border-bottom: 0; }
+.pd-add-sub { padding: 10px 0 2px; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--pd-text2); }
+.pd-add-own { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 20px; align-items: start; }
+.pd-add-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pd-add-field:nth-child(1), .pd-add-field:nth-child(3) { grid-column: 1 / -1; }
+.pd-add-own > .pd-btn { grid-column: 1 / -1; }
+.pd-add-field .pd-input { min-height: 44px; }
+.pd-add-own > .pd-btn { justify-self: start; }
+.pd-added-controls { display: flex; flex-direction: column; gap: 8px; flex: 1 1 100%; }
+.pd-added-controls > p { color: var(--pd-text2); font-size: 14px; }
+.pd-added-controls .pd-input { width: auto; min-height: 44px; }
+
 /* ---- under 640px ---- */
 @media (max-width: 639px) {
   .pd-h1 { font-size: 34px; line-height: 40px; }

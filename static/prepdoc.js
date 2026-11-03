@@ -36,6 +36,7 @@ const PD_ICONS = {
   "bell-off": '<path d="M8.7 3A6 6 0 0 1 18 8c0 2.7.6 4.5 1.3 5.6"/><path d="M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/><path d="m2 2 20 20"/>',
   lightbulb: '<path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.5 1 2.5h6c0-1 .3-1.8 1-2.5A6 6 0 0 0 12 3z"/>',
   "panel-left": '<rect x="5" y="4" width="14" height="16" rx="2"/><path d="M9 4v16"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
 };
 
 function pdIcon(name, size = 16, width = 2) {
@@ -71,7 +72,8 @@ function pdLink(text, cls, href, iconName = null) {
 const pdOver = (text, tag = "h2", cls = "pd-over") => el(tag, cls, text);
 const pdTwo = (i) => String(i + 1).padStart(2, "0");
 const pdCap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
-const pdIsWeb = (url) => /^https?:\/\//i.test(url || "");
+// A link the page can open: on the web, or one of the student's own uploads (served by the app).
+const pdIsWeb = (url) => /^(https?:\/\/|\/api\/own-files\/)/i.test(url || "");
 
 // A hairline section: a top line, then an overline header (h2) and its content.
 function pdSection(title, cls = "", meta = null) {
@@ -301,7 +303,8 @@ function pdWatchOut(c, numbered = false, cls = "") {
 }
 
 const pdDayLabel = (d) => (startOfDay(d).getTime() === startOfDay(now()).getTime() ? "Today" : d.toLocaleDateString([], { weekday: "short" }));
-const pdDueLine = (c) => (c.due_at ? `Due ${fmtDay(new Date(c.due_at))} at ${fmtTime(new Date(c.due_at))}` : "No due date");
+const pdDueLine = (c) =>
+  c.due_at ? `${c.added ? "Finish by" : "Due"} ${fmtDay(new Date(c.due_at))} at ${fmtTime(new Date(c.due_at))}` : "No due date";
 
 // ---- the page: the list, or one prep doc --------------------------------------------------------
 
@@ -388,8 +391,17 @@ function pdList() {
   title.append(el("h1", "pd-h1", "Assignments"));
   if (cards.length) title.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? `${todo.length} to do` : `${done.length} done`));
   head.append(title);
-  if (cards.length) head.append(pdListSwitch(todo.length, done.length));
-  wrap.append(cards.length ? head : pdHero());
+  const right = el("div", "pd-controls-right");
+  right.append(pdAddToggle());
+  if (cards.length) right.append(pdListSwitch(todo.length, done.length));
+  head.append(right);
+  if (cards.length) wrap.append(head);
+  else {
+    const row = el("div", "pd-add-row");
+    row.append(pdAddToggle());
+    wrap.append(pdHero(), row);
+  }
+  if (pdAdd.open) wrap.append(pdAddPanel());
   const shown = pdListView === "todo" ? todo : done;
   if (cards.length && !shown.length) {
     wrap.append(el("p", "pd-sub pd-text2", pdListView === "todo" ? "Nothing left to do. Nice." : "Nothing marked done yet."));
@@ -423,8 +435,10 @@ function pdList() {
     const cur = pdCurrent(steps, pdChecked(c));
     info.append(course, el("p", "name", c.name || `Assignment ${c.assignment_id}`));
     const first = c.quick ? `Quick task: ${c.first_step}` : cur < 0 ? "All steps done. Turn it in." : `${cur === 0 ? "Start here" : `Step ${cur + 1}`}: ${steps[cur].text}`;
-    if (!c.done) info.append(el("p", "first", first));
-    if (!c.done && c.past_due) info.append(el("p", "flag", `Past due since ${fmtDayTime(new Date(c.due_at))}`));
+    if (c.building) info.append(el("p", "first", "Building its prep doc…"));
+    else if (!c.done) info.append(el("p", "first", first));
+    if (!c.done && c.past_due) info.append(el("p", "flag", c.added ? `Finish-by time passed ${fmtDayTime(new Date(c.due_at))}` : `Past due since ${fmtDayTime(new Date(c.due_at))}`));
+    else if (!c.done && c.canvas_due_at && !c.building) info.append(el("p", "course", `Was due ${fmtDate(new Date(c.canvas_due_at))} on Canvas`));
     else if (!c.done && c.missed) info.append(el("p", "flag", `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`));
     else if (!c.done && c.watch_out) {
       const w = el("p", "watch");
@@ -435,7 +449,8 @@ function pdList() {
     const meta = el("span", "meta");
     const tag = el("span", "pd-list-type", c.quick ? "Quick task" : PD_KIND_NAMES[c.kind] || "Assignment");
     pdPaint(tag, c.color);
-    meta.append(tag, el("span", "when", c.done ? "Done" : dueText(c.due_at)), pdIcon("chevron-right", 18, 2));
+    const when = c.done ? "Done" : c.added && c.due_at ? finishText(c.due_at) : dueText(c.due_at);
+    meta.append(tag, el("span", "when", when), pdIcon("chevron-right", 18, 2));
     a.append(info, meta);
     li.append(a);
     ul.append(li);
@@ -458,6 +473,381 @@ function pdList() {
   return root;
 }
 
+// ---- Add work: what doesn't sync onto the list by itself ----------------------------------------
+//
+// Three ways in, none automatic: a Canvas assignment that isn't on the list (past due and never
+// turned in, no due date, or due later than two weeks out), an item from a class's Modules that
+// isn't an assignment, or the student's own task and files. Each gets a finish-by time that the
+// planner treats as its due date. The panel is built once and kept, so a list redraw (a new card
+// arriving) doesn't wipe what the student was typing.
+
+const pdAdd = { open: false, tab: "canvas", node: null, body: null, finish: null, items: null, query: "", course: "", modules: new Map() };
+const PD_ADD_TABS = [["canvas", "Old or later assignments"], ["modules", "From Modules"], ["own", "Your own"]];
+const PD_ITEM_TYPES = { Page: "Page", File: "File", Discussion: "Discussion", Assignment: "Assignment", Quiz: "Quiz", ExternalUrl: "Link", ExternalTool: "Outside tool" };
+
+function pdAddToggle() {
+  const b = pdBtn(pdAdd.open ? "Close" : "Add work", "soft ui", () => {
+    pdAdd.open = !pdAdd.open;
+    pdRender(true);
+    if (pdAdd.open) pdAdd.node?.querySelector(".pd-switch button[aria-pressed=true]")?.focus();
+  }, pdAdd.open ? "x" : "plus");
+  b.setAttribute("aria-expanded", String(pdAdd.open));
+  return b;
+}
+
+function pdAddPanel() {
+  if (pdAdd.node) return pdAdd.node;
+  const panel = el("section", "pd-add");
+  panel.setAttribute("aria-label", "Add work");
+  const head = el("div", "pd-add-head");
+  const text = el("div");
+  text.append(
+    el("h2", "pd-add-title", "Add work"),
+    el("p", "pd-text2", "Sync brings in what's due in the next two weeks. Add anything else here: an assignment you never finished, something from Modules, or your own."),
+  );
+  head.append(text);
+  const tabs = el("div", "pd-switch");
+  tabs.setAttribute("role", "group");
+  tabs.setAttribute("aria-label", "Add from");
+  for (const [key, name] of PD_ADD_TABS) {
+    const b = el("button", null, name);
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(pdAdd.tab === key));
+    b.addEventListener("click", () => {
+      pdAdd.tab = key;
+      tabs.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      pdAddDraw();
+    });
+    tabs.append(b);
+  }
+  const finish = el("input", "pd-input");
+  finish.type = "datetime-local";
+  finish.id = "pd-add-finish";
+  const finishLab = el("label", "pd-tile-label", "Finish by");
+  finishLab.htmlFor = finish.id;
+  const finishRow = el("div", "pd-add-finish");
+  finishRow.append(finishLab, finish, el("span", "pd-muted", "warmstart plans it before this."));
+  pdAdd.finish = finish;
+  pdAdd.body = el("div", "pd-add-body");
+  panel.append(head, tabs, finishRow, pdAdd.body);
+  pdAdd.node = panel;
+  pdAddDraw();
+  return panel;
+}
+
+const pdAddFinish = () => (pdAdd.finish?.value ? new Date(pdAdd.finish.value).toISOString() : null);
+
+async function pdAddDraw() {
+  const body = pdAdd.body;
+  if (!courses.length) await loadCourses(); // class names and colors, and the class picker
+  if (pdAdd.tab === "canvas") return pdAddCanvas(body);
+  if (pdAdd.tab === "modules") return pdAddModules(body);
+  return pdAddOwn(body);
+}
+
+// What happens after any add: the list gets it (its card may still be building) and the panel says where it went.
+async function pdAdded(r, button) {
+  const when = r.next_block ? ` Planned for ${fmtDayTime(new Date(r.next_block))}.` : "";
+  toast(`Added ${r.name}.${when}${r.building ? " Its prep doc is building." : ""}`, 6000);
+  if (button) {
+    button.textContent = "Added";
+    button.disabled = true;
+  }
+  renderedKeys.week = "";
+  pdAdd.items = null; // offered again without it next time
+  await refresh(true);
+}
+
+function pdCourseDot(courseId) {
+  const dot = el("span", "pd-list-dot");
+  dot.style.background = pdGraphic(courses.find((c) => c.id === courseId)?.color);
+  dot.setAttribute("aria-hidden", "true");
+  return dot;
+}
+
+// Canvas assignments that aren't on the list: past due first, newest first.
+async function pdAddCanvas(body) {
+  if (!pdAdd.items) {
+    body.replaceChildren(el("p", "pd-muted", "Loading…"));
+    try {
+      const r = await api("/api/added/candidates");
+      pdAdd.items = r.items;
+      if (!pdAdd.finish.value) pdAdd.finish.value = toLocalInput(new Date(r.finish_by));
+    } catch (e) {
+      return body.replaceChildren(el("p", "pd-muted", e.message));
+    }
+  }
+  if (pdAdd.tab !== "canvas") return;
+  const search = el("input", "pd-input");
+  search.type = "search";
+  search.placeholder = "Search by name or class";
+  search.setAttribute("aria-label", "Search assignments");
+  search.value = pdAdd.query;
+  const list = el("div", "pd-add-list");
+  const groups = { past: "Past due, not turned in", none: "No due date", later: "Due later" };
+  const draw = () => {
+    const q = pdAdd.query.trim().toLowerCase();
+    const shown = pdAdd.items.filter((i) => !q || `${i.name} ${i.course}`.toLowerCase().includes(q));
+    if (!shown.length) {
+      list.replaceChildren(el("p", "pd-muted", pdAdd.items.length ? "Nothing matches." : "Everything from Canvas that isn't turned in is already on your list."));
+      return;
+    }
+    const out = [];
+    for (const [g, name] of Object.entries(groups)) {
+      const items = shown.filter((i) => i.group === g);
+      if (!items.length) continue;
+      out.push(el("h3", "pd-over", name));
+      for (const i of items) {
+        const row = el("div", "pd-add-item");
+        const info = el("div", "info");
+        const course = el("p", "course");
+        course.append(pdCourseDot(i.course_id), document.createTextNode(i.course || "No class"));
+        const due = i.due_at ? `${g === "past" ? "Was due" : "Due"} ${fmtDate(new Date(i.due_at))}` : "No due date";
+        info.append(course, el("p", "name", i.name), el("p", "pd-muted", due));
+        const add = pdBtn("Add", "soft", async () => {
+          add.disabled = true;
+          try {
+            await pdAdded(await post("/api/added", { source: "canvas", assignment_id: i.id, finish_by: pdAddFinish() }), add);
+          } catch (e) {
+            add.disabled = false;
+            toast(e.message);
+          }
+        });
+        add.setAttribute("aria-label", `Add ${i.name}`);
+        row.append(info, add);
+        out.push(row);
+      }
+    }
+    list.replaceChildren(...out);
+  };
+  search.addEventListener("input", () => {
+    pdAdd.query = search.value;
+    draw();
+  });
+  draw();
+  body.replaceChildren(search, list);
+}
+
+// A class's Modules, live from Canvas: anything that isn't a heading can be added.
+async function pdAddModules(body) {
+  if (!state?.config.canvas) {
+    return body.replaceChildren(el("p", "pd-muted", "Modules come straight from Canvas: put your Canvas token in .env first."));
+  }
+  const select = el("select", "pd-input");
+  select.setAttribute("aria-label", "Class");
+  const pick = el("option", null, "Pick a class…");
+  pick.value = "";
+  select.append(pick, ...courses.map((c) => {
+    const o = el("option", null, c.name);
+    o.value = c.id;
+    return o;
+  }));
+  select.value = pdAdd.course;
+  const list = el("div", "pd-add-list");
+  const draw = async () => {
+    const id = Number(select.value);
+    if (!id) return list.replaceChildren(el("p", "pd-muted", "Pick a class to see its modules."));
+    if (!pdAdd.modules.has(id)) {
+      list.replaceChildren(el("p", "pd-muted", "Loading from Canvas…"));
+      try {
+        pdAdd.modules.set(id, (await api(`/api/canvas/modules?course_id=${id}`)).modules);
+      } catch (e) {
+        return list.replaceChildren(el("p", "pd-muted", e.message));
+      }
+    }
+    if (String(id) !== select.value) return;
+    const mods = pdAdd.modules.get(id);
+    if (!mods.length) return list.replaceChildren(el("p", "pd-muted", "This class has no modules."));
+    const out = [];
+    for (const m of mods) {
+      const det = el("details", "pd-add-module");
+      det.append(el("summary", null, m.name));
+      for (const it of m.items) {
+        if (!it.addable) {
+          det.append(el("p", "pd-add-sub", it.title));
+          continue;
+        }
+        const row = el("div", "pd-add-item");
+        row.style.paddingLeft = `${Math.min(it.indent, 4) * 16}px`;
+        const info = el("div", "info");
+        info.append(el("p", "name", it.title), el("p", "pd-muted", PD_ITEM_TYPES[it.type] || it.type));
+        let action;
+        if (it.on_list) action = el("span", "pd-add-on", "On your list");
+        else {
+          action = pdBtn("Add", "soft", async () => {
+            action.disabled = true;
+            try {
+              await pdAdded(await post("/api/added", { source: "module", course_id: id, module_id: m.id, item_id: it.id, finish_by: pdAddFinish() }), action);
+              it.on_list = true;
+            } catch (e) {
+              action.disabled = false;
+              toast(e.message);
+            }
+          });
+          action.setAttribute("aria-label", `Add ${it.title}`);
+        }
+        row.append(info, action);
+        det.append(row);
+      }
+      out.push(det);
+    }
+    out[out.length - 1].open = true; // the newest module is usually last
+    list.replaceChildren(...out);
+  };
+  select.addEventListener("change", () => {
+    pdAdd.course = select.value;
+    draw();
+  });
+  if (!pdAdd.finish.value) pdAdd.finish.value = toLocalInput(pdDefaultFinish());
+  draw();
+  body.replaceChildren(select, list);
+}
+
+// The end of tomorrow, like the server's default.
+function pdDefaultFinish() {
+  const d = now();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 23, 59);
+}
+
+// Their own: a name, a class (or none), what to do, and files.
+function pdAddOwn(body) {
+  const form = el("form", "pd-add-own");
+  const field = (labelText, input) => {
+    const wrap = el("div", "pd-add-field");
+    const lab = el("label", "pd-tile-label", labelText);
+    input.id = `pd-own-${labelText.toLowerCase().replace(/\W+/g, "-")}`;
+    lab.htmlFor = input.id;
+    wrap.append(lab, input);
+    return wrap;
+  };
+  const name = el("input", "pd-input");
+  name.required = true;
+  name.maxLength = 200;
+  name.placeholder = "Finish the history doc from Tuesday";
+  const course = el("select", "pd-input");
+  const none = el("option", null, "No class");
+  none.value = "0";
+  course.append(none, ...courses.map((c) => {
+    const o = el("option", null, c.name);
+    o.value = c.id;
+    return o;
+  }));
+  const what = el("textarea", "pd-textarea");
+  what.rows = 4;
+  what.placeholder = "What it asks for, in your words or pasted from the handout (optional)";
+  const files = el("input", "pd-input");
+  files.type = "file";
+  files.multiple = true;
+  files.accept = ".pdf,.doc,.docx,.ppt,.pptx,.odt,.rtf,.txt,.md,.png,.jpg,.jpeg,.webp,.gif";
+  const submit = el("button", "pd-btn soft", "Add it");
+  submit.type = "submit";
+  form.append(field("What is it?", name), field("Class", course), field("What to do", what), field("Files (optional, up to 5)", files), submit);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = new FormData();
+    data.append("name", name.value);
+    data.append("course_id", course.value);
+    data.append("instructions", what.value);
+    data.append("finish_by", pdAddFinish() || "");
+    [...files.files].forEach((f) => data.append("files", f));
+    submit.disabled = true;
+    submit.textContent = "Adding…";
+    try {
+      await pdAdded(await api("/api/added/own", { method: "POST", body: data }));
+      form.reset();
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      submit.disabled = false;
+      submit.textContent = "Add it";
+    }
+  });
+  if (!pdAdd.finish.value) pdAdd.finish.value = toLocalInput(pdDefaultFinish());
+  body.replaceChildren(form);
+}
+
+// ---- the divider between a prep doc's two sides -------------------------------------------------
+//
+// Drag it (or focus it and use the arrow keys) to make either side wider. The width is kept for
+// every prep doc, as the side column's share of the row; Enter or a double-click goes back to the
+// design's own split. Hidden on narrow screens, where the two sides stack.
+
+const PD_SPLIT_KEY = "pd:split";
+const PD_SIDE_MIN = 240; // px
+const PD_MAIN_MIN = 360;
+const PD_SPLIT_WIDTH = 56; // the handle fills the gap the design had between the columns
+
+function pdSplit(row, main, side) {
+  const handle = el("div", "pd-split");
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.setAttribute("aria-label", "Resize the two sides");
+  handle.setAttribute("aria-valuemin", "0");
+  handle.setAttribute("aria-valuemax", "100");
+  handle.tabIndex = 0;
+  handle.title = "Drag to resize. Double-click to reset.";
+  handle.append(el("span", "grip"));
+  row.classList.add("split");
+  row.replaceChildren(main, handle, side);
+
+  const usable = () => Math.max(1, row.getBoundingClientRect().width - PD_SPLIT_WIDTH);
+  const clamp = (share) => {
+    const w = usable();
+    const lo = PD_SIDE_MIN / w;
+    const hi = Math.max(lo, 1 - PD_MAIN_MIN / w);
+    return Math.min(hi, Math.max(lo, share));
+  };
+  const current = () => side.getBoundingClientRect().width / usable();
+  const apply = (share, save = false) => {
+    if (share === null) {
+      row.classList.remove("sized");
+      row.style.removeProperty("--pd-share");
+    } else {
+      row.classList.add("sized");
+      row.style.setProperty("--pd-share", share.toFixed(4));
+    }
+    const left = Math.round((1 - (share ?? current())) * 100);
+    handle.setAttribute("aria-valuenow", String(left));
+    handle.setAttribute("aria-valuetext", `Left side ${left}% wide`);
+    if (save) store.set(PD_SPLIT_KEY, share);
+  };
+  apply(store.get(PD_SPLIT_KEY, null));
+
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    document.body.classList.add("pd-resizing");
+    const move = (ev) => {
+      const r = row.getBoundingClientRect();
+      apply(clamp((r.right - ev.clientX - PD_SPLIT_WIDTH / 2) / usable()));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.classList.remove("dragging");
+      document.body.classList.remove("pd-resizing");
+      apply(clamp(current()), true);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up, { once: true });
+    handle.addEventListener("pointercancel", up, { once: true });
+  });
+  handle.addEventListener("dblclick", () => apply(null, true));
+  handle.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    let share = null;
+    if (e.key === "ArrowLeft") share = current() + step; // the divider moves left: the side gets wider
+    else if (e.key === "ArrowRight") share = current() - step;
+    else if (e.key === "Home") share = 1;
+    else if (e.key === "End") share = 0;
+    else if (e.key === "Enter") return void (e.preventDefault(), apply(null, true));
+    else return;
+    e.preventDefault();
+    apply(clamp(share), true);
+  });
+}
+
 function pdDoc(c, askNotes) {
   const tpl = pdTemplate(c);
   const st = pdState(c.assignment_id);
@@ -470,7 +860,7 @@ function pdDoc(c, askNotes) {
   // design keeps for things that aren't the hero or a watch-out.
   if (alert) wrap.append(alert);
   if (st.failed) wrap.append(pdFailed(c, st.failed));
-  wrap.append(st.generating ? pdGenerating(c) : c.quick ? pdQuick(c) : PD_RENDER[tpl](c));
+  wrap.append(st.generating || c.building ? pdGenerating(c) : c.quick ? pdQuick(c) : PD_RENDER[tpl](c));
   if (askNotes) wrap.append(notesAsk(c));
   wrap.append(pdFoot(c));
   root.append(wrap);
@@ -494,7 +884,7 @@ function pdHeader(c, tpl) {
   const kicker = el("p", "pd-kicker");
   const dot = el("span", "pd-dot");
   dot.setAttribute("aria-hidden", "true");
-  const due = c.due_at ? `Due ${fmtDay(new Date(c.due_at))}` : "No due date";
+  const due = c.due_at ? `${c.added ? "Finish by" : "Due"} ${fmtDay(new Date(c.due_at))}` : "No due date";
   kicker.append(dot, document.createTextNode([c.course, PD_KIND_NAMES[c.kind], due].filter(Boolean).join(" · ")));
   title.append(kicker, el("h1", "pd-h1", c.name || `Assignment ${c.assignment_id}`));
   head.append(controls, title);
@@ -552,8 +942,49 @@ function pdFoot(c) {
       }
     }),
   );
+  if (c.added) foot.append(pdAddedControls(c));
   foot.append(actions);
   return foot;
+}
+
+// Work added by hand: change when it should be done by, or take it off the list.
+function pdAddedControls(c) {
+  const box = el("div", "pd-added-controls");
+  const from = { canvas: "Added from Canvas", module: "Added from Modules", own: "Your own" }[c.origin] || "Added";
+  const input = el("input", "pd-input");
+  input.type = "datetime-local";
+  input.id = `pd-finish-${c.assignment_id}`;
+  if (c.due_at) input.value = toLocalInput(new Date(c.due_at));
+  const lab = el("label", "pd-tile-label", "Finish by");
+  lab.htmlFor = input.id;
+  const save = pdBtn("Save", "neutral", async () => {
+    if (!input.value) return toast("Pick a time first");
+    try {
+      await api(`/api/added/${c.assignment_id}`, { method: "PUT", body: JSON.stringify({ finish_by: new Date(input.value).toISOString() }) });
+      renderedKeys.week = "";
+      await refresh(true);
+      toast(`Planned again to finish by ${fmtDayTime(new Date(input.value))}.`);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  const remove = pdBtn("Take off my list", "quiet", async () => {
+    const deletes = c.origin !== "canvas";
+    if (deletes && !confirm(`Delete ${c.name} and its prep doc?`)) return;
+    try {
+      await api(`/api/added/${c.assignment_id}`, { method: "DELETE" });
+      renderedKeys.week = "";
+      closeDoc();
+      await refresh(true);
+      toast(deletes ? `${c.name} is deleted.` : `${c.name} is off your list. It's still on Canvas.`);
+    } catch (e) {
+      toast(e.message);
+    }
+  });
+  const row = el("div", "pd-actions");
+  row.append(input, save, remove);
+  box.append(el("p", null, from), lab, row);
+  return box;
 }
 
 async function pdRegenerate(c) {
@@ -602,7 +1033,7 @@ function pdGenerating(c) {
   const plan = pdSection("Plan");
   plan.append(pdSkeleton(["90%", "70%", "85%"]));
   side.append(plan, pdFilesSection(c));
-  row.append(main, side);
+  pdSplit(row, main, side);
   const live = el("p", "sr-only", "Building this prep doc…");
   live.setAttribute("role", "status");
   row.append(live);
@@ -730,7 +1161,7 @@ function pdDocument(c) {
   const warn = pdWatchOut(c, false, "pd-wide-only");
   if (warn) side.append(warn);
   side.append(pdPlan(c, steps, checked), pdFilesSection(c));
-  row.append(main, side);
+  pdSplit(row, main, side);
   return row;
 }
 
@@ -831,7 +1262,7 @@ function pdChecklist(c) {
   sec.append(ol);
   main.append(sec);
   side.append(progress, pdFilesSection(c));
-  row.append(main, side);
+  pdSplit(row, main, side);
   return row;
 }
 
@@ -1155,7 +1586,7 @@ function pdCornell(c) {
   side.append(pdFilesSection(c));
   const warn = pdWatchOut(c, false, "pd-wide-only");
   if (warn) side.append(warn);
-  row.append(main, side);
+  pdSplit(row, main, side);
   return row;
 }
 
