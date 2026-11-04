@@ -2,8 +2,9 @@
    warmstart's own color and each class in its own quieter color (theme.js paints the --pd-* tokens
    onto the pieces that belong to one class, or Clay onto the start-time pieces). Brand tokens,
    light/dark tokens, then the demo clock strip, header, check-in, week, dashboard.
-   docs/brand.md has the brand: Clay marks warmstart itself, a class color labels its own class,
-   red is only for warnings. White text on Clay is large text only, so small buttons stay ink. */
+   docs/brand.md has the brand: Clay marks warmstart itself, a class color labels its own class
+   (and the Dashboard's panels for that course), red is only for what's late or failed, orange is
+   only for watch-out lines. White text on Clay is large text only, so small buttons stay ink. */
 :root {
   /* warmstart brand tokens (docs/brand.md), exactly as handed off. */
   --ws-ink: #18181B;
@@ -531,6 +532,20 @@ td.cell.hot small { color: inherit; opacity: 0.85; }
 .graded-sections .full { color: var(--text2); font-weight: 700; }
 .graded-review { margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); font-size: 15px; font-weight: 600; }
 .graded-review ul { margin: 4px 0 0; padding-left: 1.1rem; }
+
+/* The course's panels take its color (app.js paintDashboard puts the --pd-* tokens on #dash-main):
+   a rule on top of each panel, and the course color on whatever is about that course's marks. The
+   right column isn't about one class, so it stays neutral. */
+.course-dot { display: inline-block; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+.notes-course { display: inline-flex; align-items: center; gap: 8px; }
+#dash-main .panel { border-top-color: color-mix(in srgb, var(--pd-graphic, var(--line)) 40%, var(--line)); }
+#dash-main > .panel:first-child { padding-top: 18px; border-top: 3px solid var(--pd-graphic, var(--line)); }
+#dash-main .graded-test { border-left: 4px solid var(--pd-graphic, var(--line)); }
+#dash-main .graded-test.review { border: 1.5px solid var(--warn); } /* a test that doesn't add up is a warning, not a class thing */
+#dash-main .graded-score, #dash-main .graded-sections .lost { color: var(--pd-accent-text, var(--ink)); }
+#dash-main .weak-list li::marker { color: var(--pd-graphic, currentColor); }
+#dash-main .weak-list strong { color: var(--pd-accent-text, inherit); }
+#dash-main .evidence li { padding-left: 14px; box-shadow: inset 3px 0 0 color-mix(in srgb, var(--pd-graphic, var(--line)) 55%, transparent); }
 
 /* ---- hero lockup (the empty Assignments page): 168px icon tile, 32px gap, then the wordmark,
    slogan and descriptor. Specificity beats .pd's margin reset. ---- */

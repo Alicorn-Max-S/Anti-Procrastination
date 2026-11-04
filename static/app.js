@@ -963,7 +963,12 @@ function renderNotesSettings() {
       select.addEventListener("change", () => setNotes(course.id, course.name, select.value || null));
       const controls = el("div", "notes-controls");
       controls.append(pdSwatches(course), select);
-      row.append(el("span", null, course.name), controls);
+      const name = el("span", "notes-course");
+      const dot = el("span", "course-dot");
+      dot.style.background = pdGraphic(course.color);
+      dot.setAttribute("aria-hidden", "true");
+      name.append(dot, document.createTextNode(course.name));
+      row.append(name, controls);
       return row;
     }),
   );
@@ -1014,7 +1019,19 @@ async function loadCourses() {
 }
 
 const courseName = (id) => courses.find((c) => c.id === id)?.name;
-const num = (x) => (x == null ? "?" : String(Math.round(x * 100) / 100));
+
+// The Dashboard's course panels (the marks grid, weakest spots, graded tests and feedback) take the
+// selected course's color, the way its prep docs do. The stats and settings on the right aren't
+// about one class, so they stay neutral. prepdoc.js calls this again when a color or the mode changes.
+function paintDashboard() {
+  const main = $("#dash-main");
+  const course = courses.find((c) => String(c.id) === $("#course-select").value);
+  if (!main || !course) return;
+  pdPaint(main, course.color);
+  $("#course-dot").style.background = pdGraphic(course.color);
+}
+
+const num =(x) => (x == null ? "?" : String(Math.round(x * 100) / 100));
 
 // One line for a graded test's score: "82.5% (80.5/100 + 2 bonus)".
 function scoreText(t) {
@@ -1212,6 +1229,7 @@ async function loadDashboard() {
     $("#grid").replaceChildren(el("p", "empty", "No courses yet. Sync with Canvas first."));
     return;
   }
+  paintDashboard();
   try {
     const [d, s] = await Promise.all([api(`/api/dashboard?course_id=${id}`), api("/api/stats")]);
     renderGrid(d.grid);
@@ -1231,8 +1249,8 @@ function renderGrid(grid) {
     root.replaceChildren(el("p", "empty", "No graded tests for this course yet. Add a photo below."));
     return;
   }
-  // The table takes the course's color: each cell mixes it into the page, darker where more is lost.
-  pdPaint($("#marks-panel"), courses.find((c) => String(c.id) === $("#course-select").value)?.color);
+  // The table takes the course's color (paintDashboard): each cell mixes it into the page, darker
+  // where more is lost.
   const byKey = new Map(grid.cells.map((c) => [`${c.topic}|${c.qtype}`, c]));
   const table = el("table");
   const head = el("tr");

@@ -95,14 +95,14 @@ Plus Jakarta Sans at 500, 700 and 800 from Google Fonts; fallback `'Plus Jakarta
 
 ## Brand color and class colors
 
-Clay is warmstart's own color. A class color only says which class something belongs to. Red is only for warnings.
+Clay is warmstart's own color. A class color only says which class something belongs to. Red is for what is already late or went wrong. Orange is for the heads-up about the work.
 
-| Clay | Class color | Red |
-| --- | --- | --- |
-| Header mark, icons, the empty-page hero | That class's prep doc and Focus mode | Watch-out lines |
-| The start-time check-in ("Time to start") and the week block that's on now | The dot next to the class name, and the type tag on its row in the Assignments list | Missed starts |
-| Focus rings, progress bars, today's column in Week | The Dashboard's "where you lose marks" grid for that course | |
-| | The color picker swatches | |
+| Clay | Class color | Red | Orange |
+| --- | --- | --- | --- |
+| Header mark, icons, the empty-page hero | That class's prep doc and Focus mode | Past due, with a clock icon | Watch-out lines, with a triangle icon |
+| The start-time check-in ("Time to start") and the week block that's on now | The dot next to the class name, and the type tag on its row in the Assignments list | Missed starts, and Week blocks that end after they're due | The Watch out box, the pills on the checklist and Focus mode, and the line on an Assignments row |
+| Focus rings, progress bars, today's column in Week | The Dashboard's course panels: the "where you lose marks" grid, the weakest spots, the graded tests and the feedback list for that course | A card that failed to build ("Couldn't prep this one") | |
+| | The color picker swatches | | |
 
 - A missed check-in sits on grey, so Clay is never the background of a red warning. Its Start button stays Clay: Clay means start.
 - The class colors are quieter than the Nov 1 set (OKLCH chroma about 0.05, down from 0.05 to 0.10, and tints at 18% instead of 22%). Red and orange moved off Clay's hue, and red's distance from Clay doubled. The stored colors (`app/colors.py`) didn't change, only the muted ones the page draws (`SUBJECT_COLORS[].muted` in `theme.js`).
@@ -113,7 +113,8 @@ Clay is warmstart's own color. A class color only says which class something bel
 - The gradient goes only on the icon tile, a colored lockup background, and title or hero panels. Marks on white or dark stay solid; never put a gradient inside the mark.
 - White text on the brand color must be at least 24 px regular or about 19 px bold (white on stop 2 is only 3.2:1). So small primary buttons are ink. A Clay button with white text uses the Clay that `theme.js` darkens toward --ws-deep until it passes 4.5:1 (#9B5441 on light), not --ws-accent itself.
 - Clay as text on white is 4.28:1, so it's for shapes (rings, bars, dots), not small text. Text in Clay uses the same darkened step.
-- Watch-out lines are always red (`WATCH_OUT_RED`), whatever the class color. Never use the brand color for warnings. In dark mode the red is lifted toward a light red, not toward white, so it stays vivid next to Clay light.
+- Late things are always red (`LATE_RED`) and watch-out lines are always orange (`WATCH_OUT_ORANGE`, #E8890C), whatever the class color. Never use the brand color for either. The two differ by shape as well as color (clock and triangle), so nobody has to tell them apart by hue alone. In dark mode the red is lifted toward a light red and the orange toward a light orange, not toward white, so both stay vivid next to Clay light.
+- The orange's text step is pushed to 4.5:1 on its box (4.8:1 light, 4.6:1 dark, `watchText` in `theme.js`); its icons and marks only need 3:1, so they stay a truer orange (`watchGraphic`). Re-check both after changing the orange or the tint.
 - A standalone mark or icon gets `role="img"` and `aria-label="warmstart"`. A mark next to the visible wordmark gets `aria-hidden="true"` (or `alt=""` on an `<img>`).
 
 ## Rejected, don't bring back

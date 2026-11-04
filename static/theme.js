@@ -31,8 +31,13 @@ function mutedSubject(hex) {
   return SUBJECT_COLORS.find((c) => c.hex === h)?.muted || h;
 }
 
-/** Watch-out is always this red, whatever the subject color. */
-const WATCH_OUT_RED = "#E0362C";
+/** Late (past due, a missed start, ending after it's due) and failures are always this red, whatever
+ * the subject color. */
+const LATE_RED = "#E0362C";
+
+/** Watch-out is always this orange: a heads-up about the work, not something already late. It sits
+ * about 30 degrees of hue from the red and 8 from Clay's second stop, but far more saturated. */
+const WATCH_OUT_ORANGE = "#E8890C";
 
 // Zinc greys (no blue tint). Dark mode sits on the brand's dark surface, #18181B.
 const NEUTRALS = {
@@ -99,10 +104,19 @@ function deriveTheme(subjectHex, mode) {
   accentText = ensure(accentText, n.tile, 4.5, toward);
   accentText = ensure(accentText, soft, 4.5, toward);
 
-  const warnBg = dark ? mix(WATCH_OUT_RED, n.page, 0.32) : mix(WATCH_OUT_RED, "#FFFFFF", 0.34);
+  const warnBg = dark ? mix(LATE_RED, n.page, 0.32) : mix(LATE_RED, "#FFFFFF", 0.34);
   // Dark mode lifts the red toward a light red, not toward white, so it stays a clear red and can't
   // be mistaken for Clay light (#CE9180) next to it.
-  const warnText = ensure(WATCH_OUT_RED, warnBg, 4.5, dark ? "#FF8A80" : n.text);
+  const warnText = ensure(LATE_RED, warnBg, 4.5, dark ? "#FF8A80" : n.text);
+
+  // Watch-out: the same recipe in orange. The text is pushed to 4.5:1 on the box; the square marks
+  // and icons are shapes, so they only go to 3:1 and stay visibly orange.
+  const watchBg = dark ? mix(WATCH_OUT_ORANGE, n.page, 0.28) : mix(WATCH_OUT_ORANGE, "#FFFFFF", 0.26);
+  // Light mode darkens toward a burnt orange, not the ink, so the text stays orange instead of going
+  // grey-brown (the same move Clay makes toward its deep tone).
+  const watchToward = dark ? "#FFC27A" : "#5C2A00";
+  const watchText = ensure(WATCH_OUT_ORANGE, watchBg, 4.5, watchToward);
+  const watchGraphic = ensure(WATCH_OUT_ORANGE, watchBg, 3, watchToward);
 
   return {
     ...n,
@@ -120,6 +134,9 @@ function deriveTheme(subjectHex, mode) {
     heroFill: dark ? graphic : softText,
     warnBg,
     warnText,
+    watchBg,
+    watchText,
+    watchGraphic,
   };
 }
 

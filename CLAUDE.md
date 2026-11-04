@@ -61,7 +61,7 @@ When behind, drop in this order. Rungs 1 to 5 are already cut.
 - Canvas ingest is token only.
 - Cards live on the in-tool web page, one layout per card type unless there is slack.
 - Demo data is censored real classes (`test_data/`), unless a Free-for-Teacher sandbox course is needed for a live "teacher posts an assignment" moment.
-- The name is warmstart, lowercase even at the start of a sentence, and the palette is Clay with its gradient. Read `docs/brand.md` before touching branding, copy, colors, icons or page metadata. Clay marks warmstart itself (shell, icons, the start-time check-in); a class color only labels its own class and prep doc; red is only for warnings.
+- The name is warmstart, lowercase even at the start of a sentence, and the palette is Clay with its gradient. Read `docs/brand.md` before touching branding, copy, colors, icons or page metadata. Clay marks warmstart itself (shell, icons, the start-time check-in); a class color only labels its own class and prep doc and the Dashboard's panels for that course; red is only for what's late or failed; orange is only for watch-out lines.
 
 ## Stack and APIs
 

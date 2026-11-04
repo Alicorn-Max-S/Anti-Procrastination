@@ -29,6 +29,7 @@ const PD_ICONS = {
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/>',
   "triangle-alert": '<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4"/><path d="M12 17h.01"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/>',
   upload: '<path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/>',
@@ -133,6 +134,7 @@ pdDarkQuery.addEventListener("change", () => {
 // The check-in box and the week's blocks carry class colors too (app.js); redraw them when a color
 // or the mode changes.
 function pdRepaintShell() {
+  if (typeof paintDashboard === "function") paintDashboard(); // the Dashboard's course panels too
   if (typeof state === "undefined" || !state) return;
   renderCheckin();
   renderWeek();
@@ -215,9 +217,9 @@ function pdSetChecked(c, set) {
 
 const pdCurrent = (steps, checked) => steps.findIndex((_, i) => !checked.has(i));
 
+// The student's own pick wins; else the template Glimmer decided; else the kind's default.
 function pdTemplate(c) {
   const t = store.get(`pd:tpl:${c.assignment_id}`, null);
-// The student's own pick wins; else the template Glimmer decided; else the kind's default.
   if (PD_TEMPLATES.includes(t)) return t;
   return PD_TEMPLATES.includes(c.template) ? c.template : PD_DEFAULT_TEMPLATE[c.kind] || "checklist";
 }
@@ -282,13 +284,13 @@ function pdFilesSection(c) {
   return sec;
 }
 
-// The red box. Max 3 items, and none at all when there's no feedback.
+// The orange box (red is for what's already late). Max 3 items, and none at all when there's no feedback.
 function pdWatchOut(c, numbered = false, cls = "") {
   // TODO(design): cards hold one watch-out line and not where it came from, so there is one item
   // and no source on the right.
   const items = (c.watch_out ? [c.watch_out] : []).slice(0, 3);
   if (!items.length) return null;
-  const box = el("section", `pd-warn ${cls}`.trim());
+  const box = el("section", `pd-warn watch ${cls}`.trim());
   const head = el("div", "pd-warn-head");
   const h = el("h2");
   h.append(pdIcon("triangle-alert", 16, 2.2), document.createTextNode("Watch out"));
@@ -439,9 +441,15 @@ function pdList() {
     const first = c.quick ? `Quick task: ${c.first_step}` : cur < 0 ? "All steps done. Turn it in." : `${cur === 0 ? "Start here" : `Step ${cur + 1}`}: ${steps[cur].text}`;
     if (c.building) info.append(el("p", "first", "Building its prep doc…"));
     else if (!c.done) info.append(el("p", "first", first));
-    if (!c.done && c.past_due) info.append(el("p", "flag", c.added ? `Finish-by time passed ${fmtDayTime(new Date(c.due_at))}` : `Past due since ${fmtDayTime(new Date(c.due_at))}`));
+    // Late things are red with a clock; the watch-out below is orange with a triangle.
+    const late = (text) => {
+      const p = el("p", "flag");
+      p.append(pdIcon("clock", 15, 2.2), el("span", null, text));
+      return p;
+    };
+    if (!c.done && c.past_due) info.append(late(c.added ? `Finish-by time passed ${fmtDayTime(new Date(c.due_at))}` : `Past due since ${fmtDayTime(new Date(c.due_at))}`));
     else if (!c.done && c.canvas_due_at && !c.building) info.append(el("p", "course", `Was due ${fmtDate(new Date(c.canvas_due_at))} on Canvas`));
-    else if (!c.done && c.missed) info.append(el("p", "flag", `Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`));
+    else if (!c.done && c.missed) info.append(late(`Missed the start planned for ${fmtDayTime(new Date(c.missed.start))}`));
     else if (!c.done && c.watch_out) {
       const w = el("p", "watch");
       w.append(pdIcon("triangle-alert", 15, 2.2), el("span", null, `Watch out: ${c.watch_out}`));
@@ -936,6 +944,7 @@ function pdDecided(c) {
 function pdFoot(c) {
   const foot = el("footer", "pd-foot");
   const notes = [c.quick ? "Quick task" : `${pdCap(c.effort)} effort`];
+  if (pdDecided(c)) notes.push(pdDecided(c));
   if (c.generated_by === "demo") notes.push("Demo card.");
   if (c.generated_by === "fallback") notes.push(c.model_error ? `Template card: the model call failed (${c.model_error}).` : "Template card.");
   if (c.stale) notes.push("This card will be rebuilt on the next sync.");
@@ -944,7 +953,6 @@ function pdFoot(c) {
   const regen = pdBtn("Regenerate", "neutral", () => pdRegenerate(c));
   regen.disabled = pdState(c.assignment_id).generating;
   actions.append(
-  if (pdDecided(c)) notes.push(pdDecided(c));
     regen,
     pdBtn(c.done ? "Undo done" : "Mark done", "neutral", async () => {
       try {

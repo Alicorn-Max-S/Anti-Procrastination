@@ -89,7 +89,7 @@
 .pd-btn.tall { min-height: 56px; padding: 0 24px; font-size: 16px; }
 .pd-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .pd :focus-visible, .pd-focus :focus-visible { outline: 2px solid var(--pd-soft-text); outline-offset: 2px; }
-.pd-warn :focus-visible, .pd-pill :focus-visible { outline-color: var(--pd-warn-text); }
+.pd-warn :focus-visible, .pd-pill :focus-visible { outline-color: var(--flag-text); }
 
 /* ---- template switcher ---- */
 .pd-switch { display: flex; gap: 4px; padding: 4px; border-radius: 8px; background: var(--pd-tile); }
@@ -142,15 +142,20 @@
 .pd-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .pd-hero > .pd-actions { padding-top: 6px; }
 
-/* ---- watch-out ---- */
-.pd-warn { display: flex; flex-direction: column; gap: 14px; padding: 22px 24px; border-radius: 8px; background: var(--pd-warn-bg); }
+/* ---- watch-out (orange) and failures (red) ----
+   Red is for what is already late or went wrong; orange is the heads-up about the work. One box,
+   two colors: .pd-warn is red, .pd-warn.watch and the pills are orange (the --flag-* tokens). */
+.pd-warn { --flag-bg: var(--pd-warn-bg); --flag-text: var(--pd-warn-text); --flag-mark: var(--pd-warn-text); }
+.pd-warn.watch, .pd-pill { --flag-bg: var(--pd-watch-bg); --flag-text: var(--pd-watch-text); --flag-mark: var(--pd-watch-graphic); }
+.pd-warn { display: flex; flex-direction: column; gap: 14px; padding: 22px 24px; border-radius: 8px; background: var(--flag-bg); }
 .pd-warn-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
-.pd-warn-head h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 14px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pd-warn-text); }
+.pd-warn-head h2 { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 14px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--flag-text); }
+.pd-warn-head h2 svg { color: var(--flag-mark); }
 .pd-warn-head .pd-meta { color: var(--pd-text2); letter-spacing: 0.06em; }
 .pd-warn ul, .pd-warn ol { display: flex; flex-direction: column; gap: 12px; font-size: 17px; line-height: 25px; }
 .pd-warn li { display: flex; gap: 12px; }
-.pd-warn .mark { flex: none; width: 7px; height: 7px; margin-top: 9px; background: var(--pd-warn-text); }
-.pd-warn .n { flex: none; font-weight: 700; color: var(--pd-warn-text); font-variant-numeric: tabular-nums; }
+.pd-warn .mark { flex: none; width: 7px; height: 7px; margin-top: 9px; background: var(--flag-mark); }
+.pd-warn .n { flex: none; font-weight: 700; color: var(--flag-text); font-variant-numeric: tabular-nums; }
 .pd-warn p { font-size: 17px; line-height: 25px; }
 .pd-warn .pd-actions { padding-top: 4px; }
 .pd-pill {
@@ -160,15 +165,15 @@
   gap: 8px;
   padding: 8px 12px;
   border-radius: 6px;
-  background: var(--pd-warn-bg);
-  color: var(--pd-warn-text);
+  background: var(--flag-bg);
+  color: var(--flag-text);
   font-size: 15px;
   line-height: 21px;
   font-weight: 600;
 }
 .pd-pill svg { flex: none; }
 .pd-pill.focus { gap: 10px; padding: 10px 14px; font-size: 16px; font-weight: 500; color: var(--pd-text); }
-.pd-pill.focus svg { color: var(--pd-warn-text); }
+.pd-pill.focus svg { color: var(--flag-mark); }
 
 /* ---- chips and tags ---- */
 .pd-chip { align-self: flex-start; padding: 4px 9px; border-radius: 4px; background: var(--pd-soft); color: var(--pd-soft-text); font-size: 13px; line-height: 18px; font-weight: 600; }
@@ -353,8 +358,12 @@ a.pd-file:hover .name { text-decoration-color: var(--pd-text); }
 .pd-list .course { display: flex; align-items: center; font-size: 14px; font-weight: 600; color: var(--pd-text2); }
 .pd-list .name { font-size: 22px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
 .pd-list .first { font-size: 16px; line-height: 23px; color: var(--pd-text2); }
-.pd-list .flag, .pd-list .watch { display: flex; align-items: flex-start; gap: 6px; font-size: 14px; line-height: 20px; font-weight: 600; color: var(--pd-warn-text); }
-.pd-list .watch svg { flex: none; margin-top: 2px; }
+/* Late is red with a clock; a watch-out is orange with a triangle. */
+.pd-list .flag, .pd-list .watch { display: flex; align-items: flex-start; gap: 6px; font-size: 14px; line-height: 20px; font-weight: 600; }
+.pd-list .flag { color: var(--pd-warn-text); }
+.pd-list .watch { color: var(--pd-watch-text); }
+.pd-list .flag svg, .pd-list .watch svg { flex: none; margin-top: 2px; }
+.pd-list .watch svg { color: var(--pd-watch-graphic); }
 /* Tag over the due date, with the chevron beside both. */
 .pd-list .meta { flex: 1 1 180px; display: grid; grid-template-columns: auto 18px; justify-content: end; justify-items: end; align-items: center; gap: 8px 12px; color: var(--pd-text2); }
 .pd-list .meta svg { grid-column: 2; grid-row: 1 / span 2; }
