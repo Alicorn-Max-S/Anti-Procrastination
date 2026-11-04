@@ -23,6 +23,10 @@ class Settings:
     meta_api_key: str = os.getenv("META_API_KEY", "")
     meta_model: str = os.getenv("META_MODEL", "muse-spark-1.3")
     meta_base_url: str = os.getenv("META_BASE_URL", "https://api.meta.ai/v1").rstrip("/")
+    # System One decider (decider/, `python -m decider`): local Muse Glimmer decides each assignment's
+    # type, template and effort and each graded-test question's format, topic and credit. Empty
+    # turns it off, and everything falls back to what Spark decided before Glimmer.
+    decider_url: str = os.getenv("DECIDER_URL", "http://127.0.0.1:8090").rstrip("/")
     db_path: str = os.getenv("DB_PATH", "data/app.db")
     files_dir: str = os.getenv("FILES_DIR", "data/files")  # downloaded attachments + test photos
     vapid_public_key: str = os.getenv("VAPID_PUBLIC_KEY", "")

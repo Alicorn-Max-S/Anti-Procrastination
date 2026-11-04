@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 
+from app.grader import page_rows, written_marks  # noqa: F401 (the grader's row builder, used here and by tests)
 from app.meta_client import MetaError
 from decider.prompts import assignment_context, test_context
 from decisions.fields import (
@@ -128,53 +129,6 @@ def read_pages(files: list[Path], course_id: int, course_name: str) -> list:
             pages.append(meta_client.generate_structured(
                 prompt, grader.GradedPage, files=[part], instructions=grader.INSTRUCTIONS))
     return pages
-
-
-def _g(x: float) -> str:
-    return f"{x:g}"
-
-
-def written_marks(it, section) -> str:
-    """Everything the teacher wrote at a question, as written: its marks ("X", "✓", "-1"), the
-    points it earned ("2.5/4") or lost ("-1.5") when a number is written there, and, for a question
-    alone in its section, the section's score, since that is the question's own score ("2/3")."""
-    parts = [it.marks_seen.strip()]
-    if it.points_earned is not None:
-        parts.append(f"{_g(it.points_earned)}/{_g(it.points_possible)}" if it.points_possible
-                     else _g(it.points_earned))
-    elif it.points_lost:
-        parts.append(f"-{_g(it.points_lost)}")
-    if len(section.items) == 1 and section.subtotal_earned is not None:
-        parts.append(f"{_g(section.subtotal_earned)}/{_g(section.subtotal_possible)}"
-                     if section.subtotal_possible else _g(section.subtotal_earned))
-    out: list[str] = []
-    for part in parts:
-        if part and part not in out:
-            out.append(part)
-    return ", ".join(out)
-
-
-def page_rows(pages: list) -> list[dict]:
-    """One row per question in reading order, with the marks as written (spec, Part B)."""
-    rows, section = [], ""
-    for page in pages:
-        for s in page.sections:
-            if not (s.continues_previous and section):  # a carried-on section keeps its instructions
-                section = s.instructions.strip() or s.name.strip()
-            for it in s.items:
-                number = it.number.strip()
-                text = " ".join(it.question.split())
-                if number and not text.startswith(number):
-                    text = f"{number}. {text}"
-                points = it.points_possible
-                if points is None and len(s.items) == 1:
-                    points = s.subtotal_possible
-                rows.append({
-                    "number": number, "text": text, "answer": it.student_answer,
-                    "marks": written_marks(it, s), "note": it.teacher_note.strip(),
-                    "points": points, "section": section, "bonus": s.bonus,
-                })
-    return rows
 
 
 def corrected(pages: list[dict], corrections: list[dict]) -> list[dict]:

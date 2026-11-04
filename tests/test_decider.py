@@ -677,6 +677,24 @@ def test_test_runs_fast_passes_first_then_loops(s):
     assert [d["topic"]["tier"] for d in out["decisions"].values()] == ["thought", "thought"]
 
 
+def test_think_off_keeps_a_whole_test_on_the_fast_pass(s):
+    """The same unsure answers as above, but with think off nothing thinks: the unsure fields take
+    the fast pass's top option as guesses. The lines file doesn't have to say so."""
+    fake = FakeLlama(
+        probe=by_question({"What topic": {"verbs with od oi": 0.5, "object pronouns": 0.45},
+                           "What format": UNSURE_FORMAT, "How much credit": sure("Full")}),
+        think=lambda r: (words(30) + [EOM], "eos"),
+    )
+    out = decider(fake, s).decide_test(TOPICS, QUESTIONS, think=False)
+    assert fake.kinds("think") == []
+    for d in out["decisions"].values():
+        assert d["topic"]["tier"] == "guessed" and d["topic"]["value"] == "verbs_with_od_oi"
+        assert d["format"]["tier"] == "guessed" and d["format"]["value"] == "fill_in_the_blank"
+        assert d["credit"]["tier"] == "instant" and d["topic"]["think_tokens"] == 0
+        assert not d["topic"]["clarify"]
+    assert all(r.think_n == 0 for r in fake.kinds("probe"))
+
+
 def test_parallel_loops_each_get_their_own_slot(s):
     import threading
     import time
@@ -749,6 +767,25 @@ def test_api_decide_test(api):
     body = r.json()
     assert body["decisions"]["2"]["topic"]["value"] == "object_pronouns"
     assert set(body["decisions"]["1"]) == {"topic", "credit"} and body["new_topics"] == []
+
+
+def test_api_decide_test_with_think_off(s):
+    fake = FakeLlama(
+        probe=by_question({"What topic": {"verbs with od oi": 0.5, "object pronouns": 0.45},
+                           "What format": UNSURE_FORMAT, "How much credit": sure("Full")}),
+        think=lambda r: (words(30) + [EOM], "eos"),
+    )
+    main._decider = decider(fake, s)
+    try:
+        client = TestClient(main.app)
+        r = client.post("/decide/test", json={"class_id": 2002, "topics": TOPICS, "questions": QUESTIONS[:1],
+                                              "think": False})
+        assert r.status_code == 200
+        assert r.json()["decisions"]["1"]["topic"]["tier"] == "guessed" and fake.kinds("think") == []
+        client.post("/decide/test", json={"class_id": 2002, "topics": TOPICS, "questions": QUESTIONS[:1]})
+        assert len(fake.kinds("think")) == 2  # left out, it thinks as before: topic and format
+    finally:
+        main._decider = None
 
 
 def test_api_rejects_too_many_topics(api):

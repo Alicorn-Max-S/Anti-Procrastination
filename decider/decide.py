@@ -144,8 +144,9 @@ class Decider:
             "model": self.llama.model(), "clarify": False,
         }
 
-    def _settle(self, job: Job, lines: Lines, slot: int = 0) -> dict | None:
-        """The fast pass. Returns the decision when no thinking is needed, else None."""
+    def _settle(self, job: Job, lines: Lines, slot: int = 0, think: bool = True) -> dict | None:
+        """The fast pass. Returns the decision when no thinking is needed, else None. With `think`
+        off, nothing thinks: an unsure field takes the fast pass's top option (tier `guessed`)."""
         job.fast_choice = job.choice
         job.fast = fast_pass(self.llama, job.context, job.choice, lines.fast(job.field.key),
                              self.s.letter_share_min, self.s.fast_pass_format, slot,
@@ -153,7 +154,7 @@ class Decider:
         job.prompt = job.fast.prompt
         if job.fast.instant:
             return self._decision(job, "instant", lines)
-        if job.field.key in lines.skip_thinking:
+        if job.field.key in lines.skip_thinking or not think:
             return self._decision(job, "guessed", lines)
         return None
 
@@ -330,9 +331,11 @@ class Decider:
             }
 
     def decide_test(self, topics: list[str], questions: list[dict], fields: list[str] | None = None,
-                    course: str = "", seed: int | None = None) -> dict:
+                    course: str = "", seed: int | None = None, think: bool = True) -> dict:
         """Questions in order: the fast pass for every field of every question, then the thinking
-        loops. A topic named along the way joins the class list for the questions after it."""
+        loops. A topic named along the way joins the class list for the questions after it.
+        `think` off is the fast pass alone, whatever the lines file says (the app labels graded
+        tests this way)."""
         wanted = pick_fields(QUESTION_FIELDS, fields)
         topics = list(topics)
         if len(topics) > MAX_TOPICS:
@@ -371,7 +374,7 @@ class Decider:
             for qid in out:
                 for f in wanted:
                     job = build(qid, f)
-                    d = self._settle(job, lines)
+                    d = self._settle(job, lines, think=think)
                     if d is None:
                         pending.append(job)
                     else:

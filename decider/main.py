@@ -75,6 +75,7 @@ class TestRequest(BaseModel):
     fields: list[str] | None = None
     course: str = ""  # the class name, shown first in every question's prompt when given
     seed: int | None = None
+    think: bool = True  # False: the fast pass alone, no thinking loops (how the app labels tests)
 
 
 class TraceEntry(BaseModel):
@@ -143,4 +144,4 @@ def decide_test(body: TestRequest) -> dict:
     if len(set(ids)) != len(ids):
         raise HTTPException(422, "question ids must be unique")
     questions = [q.model_dump() for q in body.questions]
-    return _run(decider().decide_test, body.topics, questions, body.fields, body.course, body.seed)
+    return _run(decider().decide_test, body.topics, questions, body.fields, body.course, body.seed, body.think)

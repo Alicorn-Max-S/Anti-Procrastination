@@ -29,7 +29,7 @@ The homework card, the test card, and the start-time ping with check-in and refl
 | Core | Canvas sync with a personal token. Homework prep card (steps, links, first step). Test prep card from graded tests (topic by question type, practice in weak formats). Start-time ping plus check-in and reflow, with the simulated clock. One web page holding the cards. |
 | Target | "Watch out for" lines on homework cards. Android push. Per-type card templates (lab, reading, problem set, test). Dashboard view. Second-solve answer check. |
 | Stretch | Nothing here is scheduled. iPhone push. Semester findings and dry run on Muse Wonder. Quiz results updating the model. A "you usually start 25 min late on Tuesdays" stat. Meta AI Connector, if admitted. |
-| Cut | Tutoring mode, learned start-time model, Muse Glimmer, Voice Transcribe, SAM, Muse Image. |
+| Cut | Tutoring mode, learned start-time model, Voice Transcribe, SAM, Muse Image. (Muse Glimmer was cut once and is back: see Stack.) |
 
 ### Cut ladder
 
@@ -72,6 +72,7 @@ When behind, drop in this order. Rungs 1 to 5 are already cut.
 | Canvas | Personal access token, polled every few minutes | Client in `app/canvas.py` |
 | Model | Muse Spark 1.3, standard tier | Standard tier doesn't train on your content; the contributor tier does |
 | Model features | File input, structured output, tool calling | PDFs and images go in directly; DOCX and PPTX are converted to PDF first (LibreOffice headless) |
+| Decisions | Muse Glimmer 30B, local, through llama-server and the decider (`python -m decider`, port 8090) | Decides every assignment's type, template and effort (thinking on where unsure) and every graded-test question's format, topic and credit (thinking off). Spark transcribes and writes; it doesn't make those calls. The app falls back to Spark's own calls when the decider is down. Serve it with the `glimmer` launch config (`-np 4 --swa-full`) |
 | Stretch model | Muse Wonder 1.0 (preview) | Only for semester findings and the dry run. $4 input, $20 output, $0.20 cached input per million tokens |
 | Hosting | A small server or a Cloudflare tunnel | Phone push needs HTTPS. iPhone push needs the PWA on the home screen, iOS 16.4 or later; Android push works from the browser |
 

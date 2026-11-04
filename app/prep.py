@@ -6,7 +6,9 @@ with structured output while letting it call `past_feedback` and `weak_spots` (t
 keep only links that really came from Canvas, add a practice set for tests, save. Without a
 model key, or if the call fails, a plain template card is saved instead.
 
-Code, not the model, has the last word on what it can check: the kind (a Canvas quiz is always a
+Glimmer (decider_client.py) decides the kind, effort, template and whether it's a quick task; Spark
+writes the card for what it decided, and with the decider off Spark decides them as before. Code,
+not the model, has the last word on what it can check: the kind (a Canvas quiz is always a
 test), the watch-out (its quotes must appear in actionable past feedback that fits this
 assignment, or in the instructions), and a reading's length and stopping points (reading.py,
 from the file's text). Where the student keeps notes is a per-course setting ("paper" or "doc");
@@ -26,7 +28,7 @@ from pathlib import Path
 import httpx
 from pydantic import BaseModel, Field
 
-from app import canvas, db, materials, meta_client, practice, reader, reading, student_model
+from app import canvas, db, decider_client, materials, meta_client, practice, reader, reading, student_model
 from app.clock import as_local
 from app.config import settings
 from app.meta_client import MetaError
@@ -48,8 +50,9 @@ CARD_WORKERS = 5  # model cards built at once during a sync (= the default MAX_C
 INSTRUCTIONS = """You write prep cards that get a high-school student started on one assignment.
 The point is to make starting effortless, not to do the work.
 
-- kind: decide it from the instructions and files. The title guess you're given is only a hint
-  and is often wrong. test only when the student will sit a quiz, test or exam for this item.
+- kind: when the prompt has a "Decided for you" line, use exactly its kind, quick and effort, and
+  write the card for them. Otherwise decide kind from the instructions and files; the title guess
+  you're given is only a hint and is often wrong. test only when the student will sit a quiz, test or exam for this item.
   Practice problems, review sheets, study guides and corrections are problem_set, even when the
   title says test or exam. Otherwise lab, reading, essay, or other.
 - first_step: ONE physical action that takes about two minutes and needs no thinking: opening,
@@ -378,8 +381,9 @@ def _prompt(
     feedback: str = "(none)",
     read_names: list[str] | None = None,
     unit: str = "",
+    decided: "decider_client.AssignmentDecision | None" = None,
 ) -> str:
-    rubric = "\n".join(
+    rubric ="\n".join(
         f"- {r.criterion} ({r.points_possible:g} pts)" if r.points_possible is not None else f"- {r.criterion}"
         for r in assignment.rubric
     )
@@ -402,10 +406,15 @@ def _prompt(
     )
     read_names = read_names or [f.name for f in files]
     keys = [n for n in read_names if is_answer_key(n)]
+    kind_line = (
+        f"Decided for you: kind {assignment.kind}; quick {'true' if decided.quick else 'false'}; effort {decided.effort}"
+        if decided
+        else f"Kind guessed from the title only (often wrong): {assignment.kind}"
+    )
     return f"""Course: {course_name or "(none given)"}
 Assignment: {assignment.name}
 What it is: {_ORIGIN[assignment.origin]}
-Kind guessed from the title only (often wrong): {assignment.kind}
+{kind_line}
 Due: {_due_text(assignment)}
 Points: {assignment.points_possible if assignment.points_possible is not None else "unknown"}
 How it's turned in: {turn_in(assignment)}
@@ -568,7 +577,9 @@ def _unit_outline(conn: sqlite3.Connection, assignment: Assignment) -> str:
     return materials.outline_text(unit, docs) if docs else ""
 
 
-def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
+def _model_card(
+    conn: sqlite3.Connection, assignment: Assignment, decided: "decider_client.AssignmentDecision | None" = None
+) -> PrepCard:
     courses = {c.id: c.name for c in db.list_courses(conn)}
     text, _, _ = canvas.parse_description(assignment.description_html)
     links = known_links(assignment)
@@ -583,14 +594,15 @@ def _model_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
             notes=notes_medium(conn, assignment.course_id), plan=plan,
             feedback=_feedback_block(conn, assignment), read_names=[s.name for s in sources if s.read],
             unit=_unit_outline(conn, assignment),
+            decided=decided,
         ),
         CardDraft,
         files=files,
         instructions=INSTRUCTIONS,
     )
-    kind = decide_kind(assignment, draft.kind)
-    steps, effort = draft.steps[:7], draft.effort
-    quick = draft.quick and kind != "test"  # a test always gets its practice
+    kind = decide_kind(assignment, decided.kind if decided else draft.kind)
+    steps, effort = draft.steps[:7], decided.effort if decided else draft.effort
+    quick = (decided.quick if decided else draft.quick) and kind != "test"  # a test always gets its practice
     if quick:
         steps, effort, plan = [], "light", None
     elif kind == "reading" and plan:
@@ -659,19 +671,40 @@ def _typeset(card: PrepCard) -> PrepCard:
     )
 
 
+def _decided(card: PrepCard, decided: "decider_client.AssignmentDecision | None") -> PrepCard:
+    """Glimmer's template and record on the card. A template card (no Spark) also takes its effort
+    and quick call, since nothing else sets them there."""
+    if decided is None:
+        return card
+    update: dict = {"template": "" if card.quick else decided.template, "decisions": decided.records}
+    if card.generated_by != "model":
+        quick = decided.quick and card.kind != "test"
+        update.update(quick=quick, effort="light" if quick else decided.effort)
+        if quick:
+            update["steps"] = []
+            update["template"] = ""
+    return card.model_copy(update=update)
+
+
 def build_prep_card(conn: sqlite3.Connection, assignment: Assignment) -> PrepCard:
-    """Generate and store the card for one assignment. If the model call fails, the template card
-    is saved with the reason in `model_error`."""
+    """Generate and store the card for one assignment. Glimmer decides its kind, effort and
+    template first (nothing changes if the decider is off). If the model call fails, the template
+    card is saved with the reason in `model_error`."""
+    course = next((c.name for c in db.list_courses(conn) if c.id == assignment.course_id), "")
+    decided = decider_client.decide_assignment(assignment, course)
+    if decided:
+        assignment = assignment.model_copy(update={"kind": decide_kind(assignment, decided.kind)})
     card = None
     error = ""
     if meta_client.configured():
         try:
-            card = _model_card(conn, assignment)
+            card = _model_card(conn, assignment, decided)
         except (MetaError, httpx.HTTPError) as e:
             log.warning("model card for %s failed, using template: %s", assignment.id, e)
             error = f"{type(e).__name__}: {e}"[:300]
     if card is None:
         card = fallback_card(conn, assignment).model_copy(update={"model_error": error})
+    card = _decided(card, decided)
     if card.kind == "test":
         card = practice.add_practice(conn, assignment, card)
     card = _typeset(card)

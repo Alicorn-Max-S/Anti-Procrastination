@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS test_rows (   -- filled by grader.py: one row per gra
     question TEXT, student_answer TEXT, marks REAL, marks_possible REAL,
     teacher_note TEXT, topic TEXT, qtype TEXT,
     test_id INTEGER, section TEXT, correct INTEGER,
-    bonus INTEGER NOT NULL DEFAULT 0, estimated INTEGER NOT NULL DEFAULT 0
+    bonus INTEGER NOT NULL DEFAULT 0, estimated INTEGER NOT NULL DEFAULT 0,
+    credit TEXT, decisions TEXT   -- Glimmer's credit label, and each label's tier and confidence as JSON
 );
 CREATE TABLE IF NOT EXISTS graded_tests (  -- filled by grader.py: one per uploaded test
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +96,8 @@ LATER_COLUMNS = [
     ("blocks", "pinned", "INTEGER NOT NULL DEFAULT 0"),
     ("blocks", "session_id", "INTEGER"),
     ("availability", "assignments", "TEXT NOT NULL DEFAULT '[]'"),
+    ("test_rows", "credit", "TEXT"),
+    ("test_rows", "decisions", "TEXT"),
 ]
 
 
@@ -358,7 +361,13 @@ def list_pings(conn: sqlite3.Connection) -> list[Ping]:
 _ROW_FIELDS = (
     "course_id", "source", "question", "student_answer", "marks", "marks_possible",
     "teacher_note", "topic", "qtype", "test_id", "section", "correct", "bonus", "estimated",
+    "credit", "decisions",
 )
+
+
+def _row_values(r: TestRow) -> tuple:
+    """A row's values in _ROW_FIELDS order; the decisions go in as JSON."""
+    return tuple(json.dumps(r.decisions) if f == "decisions" else getattr(r, f) for f in _ROW_FIELDS)
 
 
 def save_test_rows(conn: sqlite3.Connection, rows: list[TestRow]) -> list[int]:
@@ -366,7 +375,7 @@ def save_test_rows(conn: sqlite3.Connection, rows: list[TestRow]) -> list[int]:
     for r in rows:
         cur = conn.execute(
             f"INSERT INTO test_rows ({', '.join(_ROW_FIELDS)}) VALUES ({', '.join('?' * len(_ROW_FIELDS))})",
-            tuple(getattr(r, f) for f in _ROW_FIELDS),
+            _row_values(r),
         )
         ids.append(int(cur.lastrowid))
     conn.commit()
@@ -376,7 +385,7 @@ def save_test_rows(conn: sqlite3.Connection, rows: list[TestRow]) -> list[int]:
 def update_test_row(conn: sqlite3.Connection, r: TestRow) -> None:
     conn.execute(
         f"UPDATE test_rows SET {', '.join(f + '=?' for f in _ROW_FIELDS)} WHERE id=?",
-        (*(getattr(r, f) for f in _ROW_FIELDS), r.id),
+        (*_row_values(r), r.id),
     )
     conn.commit()
 
@@ -393,7 +402,12 @@ def list_test_rows(conn: sqlite3.Connection, course_id: int | None = None) -> li
         sql += " WHERE course_id = ?"
         args = (course_id,)
     rows = conn.execute(sql + " ORDER BY id", args).fetchall()
-    return [TestRow.model_validate({k: v for k, v in dict(r).items() if v is not None}) for r in rows]
+    out = []
+    for r in rows:
+        data = {k: v for k, v in dict(r).items() if v is not None}
+        data["decisions"] = json.loads(data["decisions"]) if data.get("decisions") else {}
+        out.append(TestRow.model_validate(data))
+    return out
 
 
 def save_graded_test(conn: sqlite3.Connection, t: GradedTest) -> int:

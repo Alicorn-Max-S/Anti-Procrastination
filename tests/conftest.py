@@ -40,6 +40,7 @@ def isolated(tmp_path):
         "canvas_base_url": "https://canvas.test",
         "canvas_token": "",
         "meta_api_key": "",
+        "decider_url": "",
         "vapid_public_key": "",
         "vapid_private_key": "",
         "timezone": "America/Los_Angeles",

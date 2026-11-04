@@ -13,12 +13,18 @@ to matching the title against course names and assignment titles. Question types
 per course, seeded by subject and grown from section instructions, so names stay stable and the
 student-model grid lines up across tests. Bonus questions are kept apart and never count as lost.
 
+Spark only transcribes. Each question's format, topic and credit are then labeled by Glimmer
+(label_rows, thinking off), and its format is what the row stores as `qtype`. With the decider off
+the rows keep the section types and topics Spark gave.
+
     python -m app.grader PATH [--course ID] [--fresh]   # read one file into the DB, replacing an earlier reading
+    python -m app.grader --relabel                      # label the tests already saved with Glimmer
 """
 
 import argparse
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import tempfile
@@ -29,10 +35,12 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app import db, materials, meta_client
+from app import db, decider_client, materials, meta_client
 from app.clock import clock
 from app.config import settings
 from app.models import Course, GradedTest, TestRow, TestSection
+
+log = logging.getLogger(__name__)
 
 MAX_PAGES = 12  # pages read from one upload; each is one model call
 EPS = 0.01
@@ -615,6 +623,96 @@ def _row(it: PageItem, course_id: int, source: str, qtype: str, topic: str, sect
     )
 
 
+# ---- Glimmer's labels -------------------------------------------------------------------------
+# Spark reads the pages; Glimmer (decider_client.py) labels each question: its format (which becomes
+# the row's qtype, so the topic-by-type grid and the practice sets use it), its topic from the
+# class's list, and the credit it got. Thinking is off: the fast pass alone, about a second a question.
+
+def _num(x: float) -> str:
+    return f"{x:g}"
+
+
+def written_marks(it: PageItem, section: PageSection) -> str:
+    """Everything the teacher wrote at a question, as written: its marks ("X", "✓", "-1"), the
+    points it earned ("2.5/4") or lost ("-1.5") when a number is written there, and, for a question
+    alone in its section, the section's score, since that is the question's own score ("2/3")."""
+    parts = [it.marks_seen.strip()]
+    if it.points_earned is not None:
+        parts.append(f"{_num(it.points_earned)}/{_num(it.points_possible)}" if it.points_possible
+                     else _num(it.points_earned))
+    elif it.points_lost:
+        parts.append(f"-{_num(it.points_lost)}")
+    if len(section.items) == 1 and section.subtotal_earned is not None:
+        parts.append(f"{_num(section.subtotal_earned)}/{_num(section.subtotal_possible)}"
+                     if section.subtotal_possible else _num(section.subtotal_earned))
+    out: list[str] = []
+    for part in parts:
+        if part and part not in out:
+            out.append(part)
+    return ", ".join(out)
+
+
+def page_rows(pages: list[GradedPage]) -> list[dict]:
+    """One row per question in reading order, with the marks as written: what Glimmer reads of a
+    question (the same rows the labeled set was built from, eval/items.py)."""
+    rows, section = [], ""
+    for page in pages:
+        for s in page.sections:
+            if not (s.continues_previous and section):  # a carried-on section keeps its instructions
+                section = s.instructions.strip() or s.name.strip()
+            for it in s.items:
+                number = it.number.strip()
+                text = " ".join(it.question.split())
+                if number and not text.startswith(number):
+                    text = f"{number}. {text}"
+                points = it.points_possible
+                if points is None and len(s.items) == 1:
+                    points = s.subtotal_possible
+                rows.append({
+                    "number": number, "text": text, "answer": it.student_answer,
+                    "marks": written_marks(it, s), "note": it.teacher_note.strip(),
+                    "points": points, "section": section, "bonus": s.bonus,
+                })
+    return rows
+
+
+def class_topics(conn: sqlite3.Connection, course_id: int, rows: list[TestRow]) -> list[str]:
+    """The class's topics in the order they first appeared: those on its saved rows, then the
+    topics Spark gave this test's sections (so a class with no topics yet starts from them)."""
+    topics: list[str] = []
+    for r in [*db.list_test_rows(conn, course_id), *rows]:
+        if r.topic and r.topic not in topics:
+            topics.append(r.topic)
+    return topics
+
+
+def label_rows(conn: sqlite3.Connection, course: Course | None, pages: list[GradedPage], rows: list[TestRow]) -> list[TestRow]:
+    """The rows with Glimmer's format, topic and credit. Rows come back as they were when the
+    decider is off or can't answer, and for a test with no course (there's no class to label by).
+    Code keeps the marks and `correct`; Glimmer's credit is recorded beside them, not instead."""
+    if course is None or not rows or not decider_client.configured():
+        return rows
+    questions = page_rows(pages)
+    if len(questions) != len(rows):  # the join and the row builder disagree: don't mislabel
+        log.warning("%s: %d questions on the pages but %d rows; not labeled", course.name, len(questions), len(rows))
+        return rows
+    topics = class_topics(conn, course.id, rows)
+    decided = decider_client.decide_test(course.id, course.name, topics, questions)
+    if decided is None:
+        return rows
+    out = []
+    for row, d in zip(rows, decided):
+        update: dict = {"decisions": d}
+        if "format" in d:
+            update["qtype"] = d["format"]["value"]
+        if "topic" in d and d["topic"]["value"] != "none_fit":  # unnamed: keep the topic Spark gave
+            update["topic"] = d["topic"]["value"]
+        if "credit" in d:
+            update["credit"] = d["credit"]["value"]
+        out.append(row.model_copy(update=update))
+    return out
+
+
 # ---- reading and saving a test ----------------------------------------------------------------
 
 
@@ -623,12 +721,14 @@ def _readings(sha: str) -> Path:
 
 
 def read_test(
-    conn: sqlite3.Connection, path: Path, course_id: int | None = None, fresh: bool = False
+    conn: sqlite3.Connection, path: Path, course_id: int | None = None, fresh: bool = False, sha: str = ""
 ) -> tuple[GradedTest, list[TestRow], dict[str, str]]:
     """Read a graded test file and check it. `course_id` files it there; None files it under the
     course the test points to (0 when it can't tell). Nothing is saved but the pages as read,
-    cached by file hash: the same file again is re-checked with no model calls unless `fresh`."""
-    cache = _readings(file_sha(path))
+    cached by file hash: the same file again is re-checked with no model calls unless `fresh`.
+    `sha` names a reading already cached, for a file that is no longer here."""
+    sha = sha or file_sha(path)
+    cache = _readings(sha)
     if cache.exists() and not fresh:
         pages = [GradedPage.model_validate(p) for p in json.loads(cache.read_text(encoding="utf-8"))]
     else:
@@ -641,7 +741,8 @@ def read_test(
     course = next((c for c in courses if c.id == target), None)
     qtypes = course_qtypes(conn, course) if course else {}
     test, rows, used = reconcile(pages, target, detected, path.name, qtypes)
-    return test.model_copy(update={"sha": file_sha(path)}), rows, used
+    rows = label_rows(conn, course, pages, rows)
+    return test.model_copy(update={"sha": sha}), rows, used
 
 
 def file_sha(path: Path) -> str:
@@ -677,6 +778,29 @@ def move(conn: sqlite3.Connection, test_id: int, course_id: int) -> GradedTest |
     return test
 
 
+def relabel_saved(conn: sqlite3.Connection) -> list[str]:
+    """Glimmer's labels for tests saved before it was wired in, or while the decider was off. Each
+    test's page readings are cached by file hash, so this makes no Spark calls (and needs no file,
+    only the reading); a test whose reading is gone is skipped. A labeled test is saved again like
+    a re-upload, so hand edits to its rows are replaced. Returns one line per test."""
+    report = []
+    for t in db.list_graded_tests(conn):
+        path = Path(settings.files_dir) / "tests" / t.source
+        sha = t.sha or (file_sha(path) if path.exists() else "")
+        if not sha or not _readings(sha).exists():
+            report.append(f"test {t.id} ({t.source}): skipped, its page reading isn't here")
+            continue
+        test, rows, used = read_test(conn, path, t.course_id, sha=sha)
+        if not any(r.decisions for r in rows):
+            report.append(f"test {t.id} ({t.source}): not labeled, the decider didn't answer")
+            continue
+        test = save(conn, test.model_copy(update={"created_at": t.created_at or test.created_at}), rows, used)
+        tiers = Counter(d["tier"] for r in rows for d in r.decisions.values())
+        report.append(f"test {test.id} ({t.source}): {len(rows)} questions labeled by Glimmer "
+                      f"({', '.join(f'{n} {tier}' for tier, n in sorted(tiers.items()))})")
+    return report
+
+
 def summary(test: GradedTest, course_name: str = "") -> str:
     """One plain line: score, bonus, and whether it needs a look."""
     parts = []
@@ -694,12 +818,19 @@ def summary(test: GradedTest, course_name: str = "") -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Read a graded test into the DB (replaces an earlier reading of it).")
-    p.add_argument("path", type=Path)
+    p.add_argument("path", type=Path, nargs="?")
     p.add_argument("--course", type=int, default=None, help="file it under this course id instead of detecting")
     p.add_argument("--fresh", action="store_true", help="read the pages again even if this file was read before")
+    p.add_argument("--relabel", action="store_true",
+                   help="label the tests already saved with Glimmer (needs the decider running; no Spark calls)")
     args = p.parse_args()
     conn = db.connect()
     db.init_db(conn)
+    if args.relabel:
+        print("\n".join(relabel_saved(conn)) or "no saved tests")
+        return
+    if args.path is None:
+        p.error("give a PATH, or --relabel")
     before = dict(meta_client.usage)
     test, rows, used = read_test(conn, args.path, args.course, fresh=args.fresh)
     test = save(conn, test, rows, used)

@@ -145,6 +145,11 @@ class PrepCard(BaseModel):
     reading: ReadingPlan | None = None  # readings with a readable file
     model_error: str = ""  # why the model card failed, when this is the template card instead
     stale: bool = False  # a file it couldn't read has arrived since (browser_files); the next sync rebuilds it
+    # What Glimmer decided (decider_client.py): the prep doc template to open ("document", "checklist",
+    # "dashboard" or "cornell"; "" for a quick task or when the decider was off, so the kind's default
+    # applies), and per field {"value", "tier", "confidence", "clarify"} for the card's details.
+    template: str = ""
+    decisions: dict[str, dict] = Field(default_factory=dict)
 
 
 # ---- Schedule / loop --------------------------------------------------------------------------
@@ -211,6 +216,10 @@ class TestRow(BaseModel):
     correct: bool | None = None  # None when the teacher's marks don't say
     bonus: bool = False  # bonus questions never count as lost marks (marks stay None)
     estimated: bool = False  # marks split from the section subtotal, not written at the question
+    # Glimmer's labels (decider_client.py): `qtype` and `topic` above are its format and topic;
+    # `credit` is full, partial, none or cant_tell; `decisions` keeps each field's tier and confidence.
+    credit: str = ""
+    decisions: dict[str, dict] = Field(default_factory=dict)
 
 
 class TestSection(BaseModel):

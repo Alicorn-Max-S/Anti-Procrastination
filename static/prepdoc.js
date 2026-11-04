@@ -217,7 +217,9 @@ const pdCurrent = (steps, checked) => steps.findIndex((_, i) => !checked.has(i))
 
 function pdTemplate(c) {
   const t = store.get(`pd:tpl:${c.assignment_id}`, null);
-  return PD_TEMPLATES.includes(t) ? t : PD_DEFAULT_TEMPLATE[c.kind] || "checklist";
+// The student's own pick wins; else the template Glimmer decided; else the kind's default.
+  if (PD_TEMPLATES.includes(t)) return t;
+  return PD_TEMPLATES.includes(c.template) ? c.template : PD_DEFAULT_TEMPLATE[c.kind] || "checklist";
 }
 
 function pdState(id) {
@@ -917,8 +919,20 @@ function pdSwitcher(c, tpl) {
   return group;
 }
 
-// Card details that aren't part of any template: effort, a template card's reason, and the
-// buttons the old card had.
+const PD_TIER = { instant: "instantly", thought: "after thinking", guessed: "best guess", default: "set by the type" };
+
+// "Decided by Glimmer: problem set or worksheet (instantly), checklist (set by the type), ..." when
+// the decider made the call; "" when it was off and Spark decided.
+function pdDecided(c) {
+  const d = c.decisions || {};
+  const parts = ["type", "template", "effort"]
+    .filter((k) => d[k])
+    .map((k) => `${label(d[k].value)} (${PD_TIER[d[k].tier] || d[k].tier})`);
+  return parts.length ? `Decided by Glimmer: ${parts.join(", ")}.` : "";
+}
+
+// Card details that aren't part of any template: effort, who decided it, a template card's reason,
+// and the buttons the old card had.
 function pdFoot(c) {
   const foot = el("footer", "pd-foot");
   const notes = [c.quick ? "Quick task" : `${pdCap(c.effort)} effort`];
@@ -930,6 +944,7 @@ function pdFoot(c) {
   const regen = pdBtn("Regenerate", "neutral", () => pdRegenerate(c));
   regen.disabled = pdState(c.assignment_id).generating;
   actions.append(
+  if (pdDecided(c)) notes.push(pdDecided(c));
     regen,
     pdBtn(c.done ? "Undo done" : "Mark done", "neutral", async () => {
       try {

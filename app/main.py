@@ -31,6 +31,7 @@ from app import (
     checkin,
     colors,
     db,
+    decider_client,
     grader,
     habits,
     loop,
@@ -232,7 +233,7 @@ def _checkin_view(conn, ctx: "Context", blocks: list[Block], b: Block, now: date
         )
     ]
     if b.status == "pinged":  # "You usually start 25 min late on Tuesdays." when that day has a pattern
-        view["habit"] = habits.line(habits.starts(db.list_pings(conn), blocks), as_local(b.start).weekday())
+        view["habit"] = habits.line(habits.starts(_stat_pings(conn), blocks), as_local(b.start).weekday())
     return view
 
 
@@ -265,6 +266,7 @@ def health(conn=Depends(get_conn)) -> dict:
         "push_error": json.loads(db.kv_get(conn, "push_error") or "null"),
         "extension_seen": db.kv_get(conn, "ext_seen"),
         "model_usage": meta_client.usage,
+        "decider": decider_client.healthy(),  # Glimmer, through the decider: type, template, effort, test labels
     }
 
 
@@ -1088,14 +1090,30 @@ def _test_view(t: GradedTest) -> dict:
     return {**t.model_dump(mode="json"), "percent": t.percent, "needs_review": t.needs_review}
 
 
+def _stats_since(conn) -> datetime | None:
+    """When the starting stats were last restarted (POST /api/stats/reset), else None."""
+    value = db.kv_get(conn, "stats_since")
+    return datetime.fromisoformat(value) if value else None
+
+
+def _stat_pings(conn) -> list[Ping]:
+    """The pings the starting stats count: those sent since they were last restarted."""
+    since = _stats_since(conn)
+    pings = db.list_pings(conn)
+    return pings if since is None else [p for p in pings if p.sent_at >= since]
+
+
 @app.get("/api/stats")
 def stats(conn=Depends(get_conn)) -> dict:
     """Usage numbers from the start loop: pings, answers, how long starting took, and how late
-    starts come on each weekday (with the "you usually start late on Tuesdays" lines)."""
-    pings = db.list_pings(conn)
-    blocks = db.list_blocks(conn)
+    starts come on each weekday (with the "you usually start late on Tuesdays" lines). Only what
+    happened since the last restart counts; `since` says when that was."""
+    since = _stats_since(conn)
+    pings = _stat_pings(conn)
+    every_block = db.list_blocks(conn)
+    blocks = every_block if since is None else [b for b in every_block if b.start >= since]
     delays = [(p.started_at - p.sent_at).total_seconds() / 60 for p in pings if p.started_at]
-    started = habits.starts(pings, blocks)
+    started = habits.starts(pings, every_block)  # every block, to know whose assignment a ping was for
     return {
         "pings": len(pings),
         "answers": dict(Counter(p.answer for p in pings)),
@@ -1104,7 +1122,17 @@ def stats(conn=Depends(get_conn)) -> dict:
         "blocks": dict(Counter(b.status for b in blocks)),
         "weekdays": habits.weekdays(started, blocks),
         "habits": habits.lines(started),
+        "since": since.isoformat() if since else None,
     }
+
+
+@app.post("/api/stats/reset")
+def reset_stats(conn=Depends(get_conn)) -> dict:
+    """Start the starting stats over from now. Nothing is deleted: the pings and blocks stay, since
+    the check-in still reads them (a missed start is only answered by the ping that answered it);
+    the stats just stop counting what came before."""
+    db.kv_set(conn, "stats_since", clock.now().isoformat())
+    return stats(conn)
 
 
 @app.post("/api/tests/upload")

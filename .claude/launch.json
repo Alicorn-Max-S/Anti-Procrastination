@@ -27,8 +27,11 @@
     },
     {
       "name": "glimmer",
-      "runtimeExecutable": "powershell",
-      "runtimeArgs": ["-NoProfile", "-File", "C:\\Users\\Max\\llama.cpp\\start-glimmer.ps1"],
+      "runtimeExecutable": "C:\\Users\\Max\\llama.cpp\\bin\\llama-server.exe",
+      "runtimeArgs": ["-m", "C:\\Users\\Max\\llama.cpp\\models\\Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+                      "-a", "muse-glimmer-30B", "-ngl", "99", "-c", "32768", "-np", "4", "--swa-full", "--jinja",
+                      "-lm", "dio", "--cache-ram", "1024", "--temp", "1.0", "--top-p", "0.95", "--top-k", "64",
+                      "--host", "127.0.0.1", "--port", "8080"],
       "port": 8080
     },
     {
